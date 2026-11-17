@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.7.7.680 — 2026-11-17
+
+- Show and filter by distinct vertex count in supported D3D11 and D3D12 indexed draws.
+- Integrate upstream Vulkan scene-colour fixes and the saved scene-transfer preference into the bilingual REST overlay.
+
 ## v1.7.6.680 — 2026-11-17
 
 - Add a saved per-game Vulkan scene-transfer option, startup/pending status and diagnostic launcher override detection.
