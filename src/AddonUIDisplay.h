@@ -600,6 +600,10 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                 ImGui::SetTooltip(Tr("Auto Scene Colour supports D3D10, D3D11, D3D12 and Vulkan. Vulkan native staging uses ReShade\'s generic image-blit path."));
             }
 
+            if (deviceApi == reshade::api::device_api::vulkan && !autoSceneColour) {
+                ImGui::TextWrapped("Manual Vulkan injection skips active render passes and unsupported targets. Use Auto scene colour for safe deferred placement; compatible targets are still required.");
+            }
+
             const bool autoSceneColourActive = autoSceneColour && autoSceneColourSupported;
             const bool pendingVulkanShaderEdits =
               deviceApi == reshade::api::device_api::vulkan &&
@@ -2611,6 +2615,22 @@ static void DrawCategoryOptions(AddonImGui::AddonUIData& instance) {
         }
 
         EndCard();
+    }
+
+    if (ImGui::TreeNode(Tr("Advanced Vulkan options"))) {
+        bool sceneTransfers = instance.GetVulkanSceneTransfers();
+        if (DrawToggleRow("Enable Vulkan scene transfers (requires restart)", &sceneTransfers,
+                          "Allows scene copies for compatible FP16 Vulkan targets. Save changes and restart the game. Requires Resource Shim set to none.")) {
+            instance.SetVulkanSceneTransfers(sceneTransfers);
+        }
+        const bool active = instance.GetActiveVulkanSceneTransfers();
+        ImGui::Text(Tr("Active this launch: %s"), Tr(active ? "Enabled" : "Disabled"));
+        if (instance.HasVulkanSceneTransfersOverride()) {
+            ImGui::TextWrapped("%s", Tr("Launcher override is active. Remove REST_VULKAN_SCENE_TRANSFERS from the launcher and restart to use the saved preference."));
+        } else if (sceneTransfers != active) {
+            ImGui::TextWrapped("%s", Tr("Pending change: save changes and restart the game to apply."));
+        }
+        ImGui::TreePop();
     }
 
     if (ImGui::CollapsingHeader(Tr("General info and help"))) {

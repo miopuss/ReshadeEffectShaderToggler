@@ -1,10 +1,19 @@
 # Changelog
 
+## v1.7.6.680 — 2026-11-17
+
+- Add a saved per-game Vulkan scene-transfer option, startup/pending status and diagnostic launcher override detection.
+- Keep image-creation policy fixed until restart; preserve existing safety checks and default-off behaviour.
+- Modern and Legacy local testing passed. See [release notes](docs/releases/v1.7.6.680.md).
+
 ## v1.7.5.680 — 2026-11-17
 
 - Add a dedicated REST overlay with group cards, a shortcuts table and a searchable technique list with routing modes.
 - Add per-shader hiding, draw-count and instance-count filters, and region selection for supported direct D3D11 and D3D12 draws.
 - Publish separate English and Simplified Chinese packages for both x64 and x86.
+- Vulkan manual-injection guards, safer attachment usage, broader automatic upscaling matching and optional FP16 scene-copy support.
+- Enshrouded SDR/HDR and BG3 D3D11/Vulkan testing passed on Modern and Legacy; see the validation record for detailed coverage.
+- See [release notes](docs/releases/v1.7.5.680.md) for scope, optional setup and validation limits.
 
 ## v1.7.4.680 — 2026-11-16
 
