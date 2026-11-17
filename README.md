@@ -1,7 +1,7 @@
-# REST Enhanced — ReShade Effect Shader Toggler
+# REST Enhanced+ — ReShade Effect Shader Toggler
 
-[![MSBuild](https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler/actions/workflows/msbuild.yml/badge.svg)](https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler/actions/workflows/msbuild.yml)
-[![Release](https://img.shields.io/github/v/release/Pav-Osmolski/ReshadeEffectShaderToggler?label=release)](https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler/releases/latest)
+[![MSBuild](https://github.com/miopuss/ReshadeEffectShaderToggler/actions/workflows/msbuild.yml/badge.svg)](https://github.com/miopuss/ReshadeEffectShaderToggler/actions/workflows/msbuild.yml)
+[![Release](https://img.shields.io/github/v/release/miopuss/ReshadeEffectShaderToggler?label=release)](https://github.com/miopuss/ReshadeEffectShaderToggler/releases/latest)
 
 A ReShade 6.8+ add-on for applying ReShade effects at specific points inside a game's rendering pipeline. REST groups user-selected shaders and can inject selected ReShade techniques immediately before those shaders are encountered.
 
@@ -13,7 +13,7 @@ Both 64-bit and 32-bit are first-class build targets. CI builds and validates bo
 
 - [Getting started](docs/getting-started.md): installation, upgrading, first group and BG3 configurations.
 - [Documentation index](docs/README.md): Auto Scene Colour, HDR, troubleshooting and building.
-- [Downloads](https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler/releases) and [changelog](CHANGELOG.md).
+- [Downloads](https://github.com/miopuss/ReshadeEffectShaderToggler/releases) and [changelog](CHANGELOG.md).
 
 ## Highlights
 
@@ -31,7 +31,7 @@ Both 64-bit and 32-bit are first-class build targets. CI builds and validates bo
 
 ## Compatibility
 
-REST Enhanced v1.7+ targets **ReShade 6.8 or newer** and is compiled against the ReShade 6.8.0 / API 20 baseline.
+REST Enhanced+ v1.0.0 targets **ReShade 6.8 or newer** and is compiled against the ReShade 6.8.0 / API 20 baseline.
 
 The existing render-target, shader-hunting and binding features remain API/game dependent. D3D10/D3D11/D3D12 and Vulkan behaviour outside the paths that have been specifically tested may vary by title.
 
@@ -54,7 +54,7 @@ For Unreal Engine games this is often the executable under a path such as:
 
 ReShade must be installed against that executable with full add-on support enabled. Copy the supplied `Shaders/REST_*.fx` files into a configured effect search folder and ensure the include path contains `ReShade.fxh`. Back up your INI before replacing a binary or installing example configs; see [Getting started](docs/getting-started.md).
 
-Start the game and open the ReShade overlay. The **Add-ons** tab should list **REST Enhanced — ReShade Effect Shader Toggler**. Open the dedicated **REST** panel to configure it.
+Start the game and open the ReShade overlay. The **Add-ons** tab should list **REST Enhanced+ — ReShade Effect Shader Toggler**. Open the dedicated **REST** panel to configure it.
 
 ## Basic workflow
 
@@ -201,6 +201,8 @@ See [Release Process](docs/RELEASING.md) for the release checklist and packaging
 
 ## Credits
 
+- [miopuss](https://github.com/miopuss) - fork maintainer, dedicated REST overlay and Simplified Chinese localization, per-shader draw filters, multi-range index matching, observed-draw presets, and screen-region hiding.
+
 - [alex / 4lex4nder](https://github.com/4lex4nder) - ReShade Effect Shader Toggler development.
 - **[DeViLhoOD](https://github.com/Pav-Osmolski)** - Automatic Scene Colour, Vulkan safe-boundary injection and previews, shader-hunting stability improvements, DLSS/upscaled rendering support, x86/x64 hardening, QoL workflow improvements, documentation and testing.
 - [Frans Bouma](https://github.com/FransBouma) - original ShaderToggler.
@@ -209,7 +211,7 @@ See [Release Process](docs/RELEASING.md) for the release checklist and packaging
 - [Marty McFly](https://github.com/martymcmodding) - constant-buffer extraction idea.
 - [darkarchan](https://github.com/darkarchan) - testing and contributions.
 
-- [BadassBaboon](https://github.com/BadassBaboon) / CrazyDaifu - adapted D3D9 surface/reset and removed-group lifetime fixes; see [fork attribution](docs/maintenance-release-validation.md#attribution) and [license notice](docs/fork-license.txt).
+- [BadassBaboon](https://github.com/BadassBaboon/ReshadeEffectShaderToggler) - UI design reused in this fork. BadassBaboon and CrazyDaifu also contributed D3D9 surface/reset and removed-group lifetime fixes; see [fork attribution](docs/maintenance-release-validation.md#attribution) and [license notice](docs/fork-license.txt).
 
 ## Licence
 

@@ -2,30 +2,9 @@
 
 This fork uses GitHub Actions for validation and tagged releases. For local commands see [Building](BUILDING.md); user instructions start at the [documentation index](README.md).
 
-| Release line | Maintained branch | Version suffix | Latest designation |
-|---|---|---|---|
-| Modern | `main` | `.680` | Yes |
-| Legacy / ReShade 5.x | `legacy/reshade-5.x` | `.580` | No |
+The maintained branch for REST Enhanced+ is `main`. Release tags use `vMAJOR.MINOR.PATCH`, starting at `v1.0.0`. The ReShade 6.8 / API 20 baseline is independent of the release number.
 
-## Version format
-
-Release tags must use:
-
-`vMAJOR.MINOR.PATCH.RESHADE`
-
-Example:
-
-`v1.7.3.680`
-
-The final component preserves the upstream convention used for the ReShade baseline.
-
-The source tree contains a human-readable default version in `src/version.h`. During a tagged release, the workflow validates the tag and runs `src/set_release_version.ps1` so the packaged binaries are stamped from the tag itself.
-
-## Release display names
-
-GitHub release titles use **REST Enhanced vMAJOR.MINOR.PATCH.RESHADE** on Modern and **REST Enhanced vMAJOR.MINOR.PATCH.RESHADE (ReShade 5.x)** on Legacy. For example: `REST Enhanced v1.7.4.680` and `REST Enhanced v1.6.8.580 (ReShade 5.x)`.
-
-The release workflow supplies these display names automatically. Tags remain `vMAJOR.MINOR.PATCH.RESHADE`; the tagger still requires the exact release commit first line `Release vMAJOR.MINOR.PATCH.RESHADE`. These commit/tag rules are separate from the public display title. The manually maintained Testing Only pre-release keeps its own name.
+Keep the tag and `REST_VERSION_STRING` in `src/version.h` aligned. Windows file metadata uses a fourth numeric component of zero. The release commit title is `Release vMAJOR.MINOR.PATCH` and the public title is **REST Enhanced+ vMAJOR.MINOR.PATCH**.
 
 ## Pre-release checklist
 
@@ -137,7 +116,7 @@ For a release PR, commit the matching `src/version.h`, changelog entry and `docs
 
 The guarded `tag` job runs inside **MSBuild**, after its `build` job succeeds for a push to the maintained branch. It checks out that validated commit, reads its source version, verifies the release title and notes, and checks any existing tag points to that exact commit. It then creates the tag and explicitly dispatches **Release** at the tag. Ordinary commits skip this job and do not create tags or additional workflow runs. Release titles must match exactly on their first line. Both maintained branches contain their own release gate; no default-branch `workflow_run` relay is needed.
 
-The publisher validates its maintained line's version suffix and branch ancestry, rebuilds both architectures, runs regression tests and shared binary validation, then publishes. Per-tag concurrency prevents overlapping publishers. Existing releases/assets are immutable; a manual publisher retry against an existing release fails instead of replacing files. Never move or reuse a tag.
+The publisher validates the three-part tag and its ancestry on main, rebuilds both architectures, runs regression tests and shared binary validation, then publishes. Per-tag concurrency prevents overlapping publishers. Existing releases/assets are immutable; a manual publisher retry against an existing release fails instead of replacing files. Never move or reuse a tag.
 
 A tag may still be created manually from the desired `main` commit when needed.
 

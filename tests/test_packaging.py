@@ -22,7 +22,7 @@ class PackagingTests(unittest.TestCase):
                     path /= 'example.txt'
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('Fixture: ' + target, encoding='utf-8')
-        (root / 'src/version.h').write_text('#define REST_VERSION_STRING "1.7.2.680"\n')
+        (root / 'src/version.h').write_text('#define REST_VERSION_STRING "1.0.0"\n')
         (root / 'scripts').mkdir(exist_ok=True)
         (root / 'scripts/package-manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
 
@@ -33,7 +33,7 @@ class PackagingTests(unittest.TestCase):
             commit = 'a' * 40
             packager.package(root, 'test', commit)
             packager.package(root, 'release', commit)
-            with zipfile.ZipFile(root / 'test-package/REST-test-1.7.2.680-aaaaaaaaaaaa.zip') as ci, \
+            with zipfile.ZipFile(root / 'test-package/REST-test-1.0.0-aaaaaaaaaaaa.zip') as ci, \
                  zipfile.ZipFile(root / 'release.zip') as release:
                 self.assertEqual(set(ci.namelist()), set(release.namelist()))
                 self.assertIn('CHANGELOG.md', release.namelist())

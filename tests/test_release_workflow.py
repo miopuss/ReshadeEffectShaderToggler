@@ -9,7 +9,7 @@ import yaml
 
 
 class ReleaseRoutingTests(unittest.TestCase):
-    def run_tagger(self, branch='main', version='1.7.2.680', title=None,
+    def run_tagger(self, branch='main', version='1.0.0', title=None,
                    existing=False, existing_sha=None, published=False, notes=True):
         workflow = yaml.safe_load(Path('.github/workflows/msbuild.yml').read_text(encoding='utf-8-sig'))
         script = workflow['jobs']['tag']['steps'][1]['run']
@@ -59,13 +59,8 @@ printf 'gh %s\\n' "$*" >> commands
     def test_new_modern_release(self):
         result, log = self.run_tagger()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('git push origin refs/tags/v1.7.2.680', log)
-        self.assertIn('gh workflow run release.yml --ref v1.7.2.680', log)
-
-    def test_new_legacy_release(self):
-        result, log = self.run_tagger(branch='legacy/reshade-5.x', version='1.6.6.580')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('--ref v1.6.6.580', log)
+        self.assertIn('git push origin refs/tags/v1.0.0', log)
+        self.assertIn('gh workflow run release.yml --ref v1.0.0', log)
 
     def test_existing_tag_same_commit(self):
         result, log = self.run_tagger(existing=True)
@@ -83,13 +78,13 @@ printf 'gh %s\\n' "$*" >> commands
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(log, '')
 
-    def test_wrong_branch_suffix_is_rejected(self):
+    def test_other_branch_is_rejected(self):
         result, log = self.run_tagger(branch='legacy/reshade-5.x')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(log, '')
 
     def test_wrong_title_is_rejected(self):
-        result, log = self.run_tagger(title='Release v1.7.2.680-unreviewed')
+        result, log = self.run_tagger(title='Release v1.0.0-unreviewed')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(log, '')
 

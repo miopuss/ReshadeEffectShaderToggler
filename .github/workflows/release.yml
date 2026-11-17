@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*.*"
+      - "v*.*.*"
   workflow_dispatch:
 
 concurrency:
@@ -30,8 +30,8 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $tag = $env:RELEASE_TAG
-          if ($tag -notmatch '^v\d+\.\d+\.\d+\.680$') {
-            throw "Modern release tags must use vMAJOR.MINOR.PATCH.680 for the ReShade 6.8 API baseline."
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Modern release tags must use vMAJOR.MINOR.PATCH."
           }
 
           $match = Select-String -Path "./src/version.h" -Pattern 'REST_VERSION_STRING "([^"]+)"'
@@ -96,5 +96,5 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           # Existing releases are immutable: retries must never replace assets.
-          gh release create $env:RELEASE_TAG "release.zip" "release.zh-CN.zip" "SHA256SUMS.txt" "BG3-Configs-D3D11+Vulkan.zip" "BG3-Configs-SHA256SUMS.txt" "BG3-Configs-PROVENANCE.txt" --verify-tag --latest --title "REST Enhanced $env:RELEASE_TAG" --notes-file "docs/releases/$env:RELEASE_TAG.md"
+          gh release create $env:RELEASE_TAG "release.zip" "release.zh-CN.zip" "SHA256SUMS.txt" "BG3-Configs-D3D11+Vulkan.zip" "BG3-Configs-SHA256SUMS.txt" "BG3-Configs-PROVENANCE.txt" --verify-tag --latest --title "REST Enhanced+ $env:RELEASE_TAG" --notes-file "docs/releases/$env:RELEASE_TAG.md"
           if ($LASTEXITCODE -ne 0) { throw "Release publication failed; existing releases are never overwritten." }

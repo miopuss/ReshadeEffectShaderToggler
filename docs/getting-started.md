@@ -6,11 +6,11 @@
 
 | Your ReShade installation | REST release line |
 |---|---|
-| ReShade 6.8 or newer, with full add-on support | Modern (`.680` version suffix) |
-| ReShade 5.8–5.9.2, with full add-on support | Legacy (`.580` suffix); ReShade 5.9.2 recommended |
+| ReShade 6.8 or newer, with full add-on support | REST Enhanced+ |
+| ReShade 5.8–5.9.2, with full add-on support | Upstream Legacy branch; ReShade 5.9.2 recommended |
 | Older than ReShade 5.8 | Unsupported |
 
-Download `release.zip` from the appropriate [GitHub release](https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler/releases). The repository's Latest release is Modern; Legacy has its own clearly labelled release. The final version component identifies the SDK baseline, not a game version.
+Download `release.zip` from the appropriate [GitHub release](https://github.com/miopuss/ReshadeEffectShaderToggler/releases). The Latest release targets ReShade 6.8 or newer. The upstream Legacy branch targets ReShade 5.x.
 
 ## Install or upgrade
 

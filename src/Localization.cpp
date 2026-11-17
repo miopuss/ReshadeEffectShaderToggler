@@ -335,7 +335,6 @@ constexpr TranslationEntry kTranslations[] = {
     { "Render target index", "渲染目标索引" },
     { "Render target", "渲染目标" },
     { "Rescan", "重新扫描" },
-    { "Reshade Effect Shader Toggler", "Reshade Effect Shader Toggler" },
     { "Resource Shim:", "资源 Shim：" },
     { "Retry RT assignment", "重试渲染目标分配" },
     { "Right Arrow", "向右键" },

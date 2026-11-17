@@ -24,7 +24,8 @@
     <ProjectGuid>{0de84e87-dc72-40a6-a1fd-d01e49659b21}</ProjectGuid>
     <RootNamespace>ShaderToggler</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
-    <ProjectName>ReshadeEffectShaderToggler</ProjectName>
+    <ProjectName>REST Enhanced+</ProjectName>
+    <TargetName>ReshadeEffectShaderToggler</TargetName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">

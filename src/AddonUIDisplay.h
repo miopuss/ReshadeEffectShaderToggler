@@ -2682,7 +2682,7 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
         const float visible_right = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - style.WindowPadding.x -
                                     ((ImGui::GetScrollMaxY() > 0.0f) ? style.ScrollbarSize : 0.0f);
 
-        ImGui::TextColored(rfx_accent(), "%s", Tr("Reshade Effect Shader Toggler"));
+        ImGui::TextColored(rfx_accent(), "%s", "REST Enhanced+");
         ImGui::SameLine();
         ImGui::TextDisabled("%s", ver_text.c_str());
 

@@ -110,7 +110,7 @@ jobs:
     needs: build
     if: >-
       github.event_name == 'push' &&
-      (github.ref_name == 'main' || github.ref_name == 'legacy/reshade-5.x') &&
+      github.ref_name == 'main' &&
       startsWith(github.event.head_commit.message, 'Release v')
     permissions:
       actions: write
@@ -135,12 +135,7 @@ jobs:
           set -euo pipefail
           version="$(sed -n 's/^#define REST_VERSION_STRING "\([^"]*\)"/\1/p' src/version.h)"
           tag="v${version}"
-          case "$RELEASE_BRANCH" in
-            main) suffix=680 ;;
-            legacy/reshade-5.x) suffix=580 ;;
-            *) echo "Unsupported release branch" >&2; exit 1 ;;
-          esac
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.${suffix}$ ]] || { echo "Invalid release version for branch" >&2; exit 1; }
+          [[ "$RELEASE_BRANCH" == main && "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release version for branch" >&2; exit 1; }
           [[ "${COMMIT_MESSAGE%%$'\n'*}" == "Release $tag" ]] || { echo "Release title/version mismatch" >&2; exit 1; }
           test -f "docs/releases/${tag}.md"
           git merge-base --is-ancestor "$RELEASE_SHA" "origin/$RELEASE_BRANCH"

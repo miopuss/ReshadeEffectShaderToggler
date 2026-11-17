@@ -1,4 +1,4 @@
-# REST Enhanced documentation
+# REST Enhanced+ documentation
 
 Start with [Getting started](getting-started.md) for installation, upgrading and the first shader group.
 

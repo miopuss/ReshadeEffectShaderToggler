@@ -15,7 +15,7 @@ Modern and Legacy use different pinned ReShade SDKs. Check out the intended main
 Clone this repository, enter it, then initialize pinned dependencies:
 
 ```powershell
-git clone https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler.git
+git clone https://github.com/miopuss/ReshadeEffectShaderToggler.git
 cd ReshadeEffectShaderToggler
 ./scripts/fetch-dependencies.ps1
 ```
@@ -85,4 +85,4 @@ The file lists come from `scripts/package-manifest.json`; configuration sources 
 
 Keep WIP PRs in draft. Once final, wait until GitHub shows the current head/merge revision, then mark ready for review. Checks run on opened, reopened and ready-for-review events; ordinary synchronize events do not start a new build. A newer commit still needs a new successful required check before merging. Current branch protection requires `build` and an up-to-date branch.
 
-Documentation-only PRs report that check without native compilation. Native/build/config changes validate x86 and x64. Maintained-branch merges validate again. A release-titled merge starts the tag job only after its branch build succeeds; publication is a separate guarded workflow. See [Release process](RELEASING.md) for exact titles, version suffixes and immutable tag/assets rules.
+Documentation-only PRs report that check without native compilation. Native/build/config changes validate x86 and x64. Maintained-branch merges validate again. A release-titled merge starts the tag job only after its branch build succeeds; publication is a separate guarded workflow. See [Release process](RELEASING.md) for exact titles, version format and immutable tag/assets rules.

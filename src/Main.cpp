@@ -70,8 +70,8 @@ using namespace AddonImGui;
 using namespace Shim::Constants;
 using namespace std;
 
-extern "C" __declspec(dllexport) const char* NAME = "REST Enhanced — ReShade Effect Shader Toggler";
-extern "C" __declspec(dllexport) const char* AUTHOR = "DeViLhoOD";
+extern "C" __declspec(dllexport) const char* NAME = "REST Enhanced+ — ReShade Effect Shader Toggler";
+extern "C" __declspec(dllexport) const char* AUTHOR = "miopuss";
 #if REST_LOCALIZED_UI
 extern "C" __declspec(dllexport) const char* DESCRIPTION =
   "在着色器指定的渲染阶段应用选定的 ReShade 效果，支持为升采样渲染自动注入场景色彩。";
@@ -79,8 +79,8 @@ extern "C" __declspec(dllexport) const char* DESCRIPTION =
 extern "C" __declspec(dllexport) const char* DESCRIPTION =
   "ReShade add-on for applying selected effects at shader-defined points in the rendering pipeline, including automatic scene-colour injection for upscaled rendering.";
 #endif
-extern "C" __declspec(dllexport) const char* WEBSITE = "https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler";
-extern "C" __declspec(dllexport) const char* ISSUES = "https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler/issues";
+extern "C" __declspec(dllexport) const char* WEBSITE = "https://github.com/miopuss/ReshadeEffectShaderToggler";
+extern "C" __declspec(dllexport) const char* ISSUES = "https://github.com/miopuss/ReshadeEffectShaderToggler/issues";
 
 constexpr auto MAX_EFFECT_HANDLES = 128;
 constexpr auto REST_VAR_ANNOTATION = "source";

@@ -57,13 +57,13 @@ LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
 #pragma code_page(65001)
 #define REST_VERSION_LANG "080404b0"
 #define REST_VERSION_LANG_ID 0x804
-#define REST_PRODUCT_NAME "ReShade 效果着色器切换器"
+#define REST_PRODUCT_NAME "REST Enhanced+"
 #else
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_UK
 #pragma code_page(1252)
 #define REST_VERSION_LANG "040004b0"
 #define REST_VERSION_LANG_ID 0x400
-#define REST_PRODUCT_NAME "ReShade Effect Shader Toggler add-on for ReShade"
+#define REST_PRODUCT_NAME "REST Enhanced+"
 #endif
 
 /////////////////////////////////////////////////////////////////////////////
@@ -88,7 +88,7 @@ BEGIN
     BEGIN
         BLOCK REST_VERSION_LANG
         BEGIN
-            VALUE "CompanyName", "alex / DeViLhoOD"
+            VALUE "CompanyName", "miopuss"
             VALUE "FileDescription", REST_PRODUCT_NAME
             VALUE "FileVersion", REST_VERSION_STRING
             VALUE "InternalName", "ShaderTo.dll"

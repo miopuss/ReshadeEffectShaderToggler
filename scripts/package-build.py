@@ -28,10 +28,10 @@ def package(root, kind, commit, include_chinese=False):
     if kind not in ('test', 'release') or not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('Expected a package kind and full Git commit identity')
     manifest = json.loads((root / 'scripts/package-manifest.json').read_text(encoding='utf-8'))
-    version = re.search(r'^#define REST_VERSION_STRING "([0-9]+(?:\.[0-9]+){3})"',
+    version = re.search(r'^#define REST_VERSION_STRING "([0-9]+(?:\.[0-9]+){2})"',
                         (root / 'src/version.h').read_text(encoding='utf-8-sig'), re.MULTILINE)
     if version is None:
-        raise ValueError('Missing four-part source version')
+        raise ValueError('Missing three-part source version')
     version = version[1]
     # Validate every input before creating any output archives.
     contents = {key: list(entries(root, manifest[key])) for key in ('main', 'bg3')}
@@ -45,7 +45,7 @@ def package(root, kind, commit, include_chinese=False):
     output.mkdir(parents=True, exist_ok=True)
     main_name = f'REST-test-{version}-{commit[:12]}.zip' if kind == 'test' else 'release.zip'
     bg3_name = 'BG3-Configs-D3D11+Vulkan.zip'
-    info = f'REST Enhanced {version}\nCommit: {commit}\nPackage: {kind}\n'
+    info = f'REST Enhanced+ {version}\nCommit: {commit}\nPackage: {kind}\n'
     info += ('Test candidate for runtime validation; not a published stable release.\n' if kind == 'test' else
              'Release package. See docs/releases for changes and recorded test coverage.\n')
     info += 'Compilation and CPU tests do not establish game/GPU runtime correctness.\n'

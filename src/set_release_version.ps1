@@ -9,8 +9,8 @@ if ($normalizedVersion.StartsWith("v", [System.StringComparison]::OrdinalIgnoreC
     $normalizedVersion = $normalizedVersion.Substring(1)
 }
 
-if ($normalizedVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
-    throw "Version must use MAJOR.MINOR.PATCH.RESHADE format, for example 1.4.0.633."
+if ($normalizedVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Version must use MAJOR.MINOR.PATCH format, for example 1.0.0."
 }
 
 $parts = $normalizedVersion.Split(".")
@@ -24,12 +24,12 @@ foreach ($part in $parts) {
     $numbers += $value
 }
 
-$major, $minor, $patch, $reshade = $numbers
+$major, $minor, $patch = $numbers
 
 $versionFile = @"
 #pragma once
-#define REST_VERSION $major,$minor,$patch,$reshade
-#define REST_VERSION_STRING "$major.$minor.$patch.$reshade"
+#define REST_VERSION $major,$minor,$patch,0
+#define REST_VERSION_STRING "$major.$minor.$patch"
 "@
 
 Set-Content -Path (Join-Path $PSScriptRoot "version.h") -Value $versionFile -Encoding UTF8
