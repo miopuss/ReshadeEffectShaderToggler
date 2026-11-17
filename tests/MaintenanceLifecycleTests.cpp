@@ -65,20 +65,31 @@ int main() {
         ShaderToggler::ShaderDrawSettings filter;
         filter.suppressDrawCall = true;
         filter.matchIndexCount = true;
-        filter.indexCountMin = 30;
-        filter.indexCountMax = 50;
+        filter.indexCountRanges = {{30, 50}, {70, 80}};
         filter.matchInstanceCount = true;
         filter.instanceCountMin = 2;
         filter.instanceCountMax = 2;
+        filter.addObservedIndexCount(123);
+        filter.addObservedIndexCount(123);
+        Check(filter.indexCountRanges.size() == 3 && filter.instanceCountMin == 2 && filter.instanceCountMax == 2);
         filter.spatialFilterEnabled = true;
         Check(ShaderToggler::addScreenRegion(filter.spatialRegions, {0.25f, 0.25f, 0.5f, 0.75f}));
         Check(!ShaderToggler::addScreenRegion(filter.spatialRegions, {0.3f, 0.3f, 0.4f, 0.4f}));
         filtered.SetShaderDrawSettings(0, 123, filter);
         const auto savedRule = filtered.FindShaderDrawSettings(0, 123);
         Check(savedRule && savedRule->matchesDrawGeometry(true, 30, 2) && savedRule->matchesDrawGeometry(true, 50, 2));
+        Check(savedRule->matchesDrawGeometry(true, 75, 2) && savedRule->matchesDrawGeometry(true, 123, 2));
         Check(!savedRule->matchesDrawGeometry(false, 30, 2) && !savedRule->matchesDrawGeometry(true, 51, 2) &&
               !savedRule->matchesDrawGeometry(true, 30, 1));
         Check(!filtered.FindShaderDrawSettings(1, 123));
+
+        ShaderToggler::ShaderDrawSettings observed;
+        observed.addObservedIndexCount(0);
+        observed.addObservedIndexCount(UINT32_MAX);
+        Check(observed.suppressDrawCall && observed.matchIndexCount && !observed.matchInstanceCount);
+        Check(observed.matchesDrawGeometry(true, 0, 5) && observed.matchesDrawGeometry(true, UINT32_MAX, 9));
+        Check(!observed.matchesDrawGeometry(true, 1));
+        filtered.SetShaderDrawSettings(1, 123, observed);
 
         ShaderToggler::ShaderDrawSettings vertices;
         vertices.matchVertexCount = true;
@@ -90,8 +101,7 @@ int main() {
         Check(!vertices.matchesDrawGeometry(true, 6, 1, 5));
         Check(!vertices.matchesDrawGeometry(true, 4));
         vertices.matchIndexCount = true;
-        vertices.indexCountMin = 6;
-        vertices.indexCountMax = 6;
+        vertices.indexCountRanges = {{6, 6}};
         Check(vertices.matchesDrawGeometry(true, 6));
         Check(!vertices.matchesDrawGeometry(true, 4, 1, 4));
         Check(vertices.matchesDrawGeometry(false, 4));
@@ -134,6 +144,18 @@ int main() {
         Check(restored.configurationSignature() == filtered.configurationSignature());
         const auto restoredRule = restored.FindShaderDrawSettings(0, 123);
         Check(restoredRule && restoredRule->spatialRegions.size() == 1 && restoredRule->spatialRegions.front().maxY == 0.75f);
+        Check(restoredRule->indexCountRanges == filter.indexCountRanges);
+        const auto restoredObserved = restored.FindShaderDrawSettings(1, 123);
+        Check(restoredObserved && restoredObserved->indexCountRanges == observed.indexCountRanges);
+        const std::string drawSection = "Group0_ShaderDrawSettings";
+        const std::string legacyEntry = parsed.GetUInt("Entry0Stage", drawSection) == 0 ? "Entry0" : "Entry1";
+        Check(parsed.DeleteKey(legacyEntry + "IndexRangeCount", drawSection));
+        Check(parsed.SetUInt(legacyEntry + "IndexMax", 0, "", drawSection));
+        ShaderToggler::ToggleGroup legacy("Legacy", 14);
+        legacy.loadState(parsed, 0);
+        const auto legacyRule = legacy.FindShaderDrawSettings(0, 123);
+        Check(legacyRule && legacyRule->indexCountRanges == std::vector<ShaderToggler::IndexCountRange>{{30, UINT32_MAX}});
+        Check(!legacyRule->matchesDrawGeometry(true, 29, 2) && legacyRule->matchesDrawGeometry(true, UINT32_MAX, 2));
         const auto clone = restored.cloneForNewId(13);
         Check(static_cast<bool>(clone.FindShaderDrawSettings(0, 123)));
         restored.storeCollectedHashes({}, {123}, {});

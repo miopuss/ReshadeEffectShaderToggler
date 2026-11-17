@@ -147,13 +147,19 @@ inline bool addScreenRegion(std::vector<ScreenRegion>& regions, const ScreenRegi
     return true;
 }
 
+struct IndexCountRange {
+    uint32_t min = 0;
+    uint32_t max = 0;
+
+    bool operator==(const IndexCountRange&) const = default;
+};
+
 // Draw suppression and its geometry filters belong to one shader inside a group, not to the whole
 // group: a group usually contains several shaders and only one of them may need to be skipped.
 struct __declspec(novtable) ShaderDrawSettings final {
     bool suppressDrawCall = false;
     bool matchIndexCount = false;
-    uint32_t indexCountMin = 0;
-    uint32_t indexCountMax = 0;
+    std::vector<IndexCountRange> indexCountRanges;
     bool matchVertexCount = false;
     uint32_t vertexCountMin = 0;
     uint32_t vertexCountMax = 0;
@@ -167,7 +173,17 @@ struct __declspec(novtable) ShaderDrawSettings final {
 
     bool hasGeometryFilter() const { return matchIndexCount || matchVertexCount || matchInstanceCount; }
     bool hasSpatialFilter() const { return spatialFilterEnabled && !spatialRegions.empty(); }
-    bool isDefault() const { return !suppressDrawCall && !hasGeometryFilter() && !spatialFilterEnabled && spatialRegions.empty(); }
+    bool isDefault() const {
+        return !suppressDrawCall && !hasGeometryFilter() && indexCountRanges.empty() && !spatialFilterEnabled && spatialRegions.empty();
+    }
+
+    void addObservedIndexCount(uint32_t count) {
+        suppressDrawCall = true;
+        matchIndexCount = true;
+        const IndexCountRange range{count, count};
+        if (std::find(indexCountRanges.begin(), indexCountRanges.end(), range) == indexCountRanges.end())
+            indexCountRanges.push_back(range);
+    }
 
     bool matchesSpatialRegion(float minX, float minY, float maxX, float maxY) const {
         for (const ScreenRegion& region : spatialRegions) {
@@ -190,9 +206,9 @@ struct __declspec(novtable) ShaderDrawSettings final {
 
         if (isIndexed) {
             if (matchIndexCount) {
-                if (indexCountMin > 0 && count < indexCountMin) return false;
-                if (indexCountMax > 0 && count > indexCountMax) return false;
-                return true;
+                return std::any_of(indexCountRanges.begin(), indexCountRanges.end(), [count](const IndexCountRange& range) {
+                    return count >= range.min && count <= range.max;
+                });
             }
             if (!matchVertexCount)
                 return true;

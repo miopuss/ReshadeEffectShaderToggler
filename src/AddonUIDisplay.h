@@ -1703,31 +1703,47 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
             ImGui::BeginDisabled();
 
         bool matchIdx = drawSettings.matchIndexCount;
-        if (DrawToggleRow("Filter by index count", &matchIdx, "Match direct indexed draws whose index count is in range.", nullptr, 4.0f)) {
+        if (DrawToggleRow("Filter by index count", &matchIdx, "Match direct indexed draws whose index count is in any listed range.", nullptr, 4.0f)) {
             drawSettings.matchIndexCount = matchIdx;
             applyDrawSettings();
         }
         if (matchIdx) {
             ImGui::Indent(16.0f);
-            int idxMin = static_cast<int>(drawSettings.indexCountMin);
-            int idxMax = static_cast<int>(drawSettings.indexCountMax);
-            ImGui::AlignTextToFramePadding();
-            ImGui::Text(Tr("Min:"));
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(90.0f);
-            if (ImGui::InputInt("##IdxMinOverlay", &idxMin, 0)) {
-                drawSettings.indexCountMin = static_cast<uint32_t>(std::max(0, idxMin));
+            if (drawSettings.indexCountRanges.empty())
+                ImGui::TextDisabled("%s", Tr("No index ranges. Indexed draws will not match."));
+            std::optional<size_t> removeRange;
+            for (size_t i = 0; i < drawSettings.indexCountRanges.size(); ++i) {
+                auto& range = drawSettings.indexCountRanges[i];
+                ImGui::PushID(static_cast<int>(i));
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(Tr("Min:"));
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(96.0f);
+                const bool minChanged = ImGui::InputScalar("##IndexMin", ImGuiDataType_U32, &range.min);
+                ImGui::SameLine();
+                ImGui::TextUnformatted(Tr("Max:"));
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(96.0f);
+                const bool maxChanged = ImGui::InputScalar("##IndexMax", ImGuiDataType_U32, &range.max);
+                ImGui::SameLine();
+                if (ImGui::SmallButton(Tr("Remove")))
+                    removeRange = i;
+                if (range.min > range.max)
+                    ImGui::TextDisabled("%s", Tr("Minimum exceeds maximum."));
+                if (minChanged || maxChanged)
+                    applyDrawSettings();
+                ImGui::PopID();
+            }
+            if (removeRange) {
+                drawSettings.indexCountRanges.erase(drawSettings.indexCountRanges.begin() + *removeRange);
                 applyDrawSettings();
             }
-            ImGui::SameLine();
-            ImGui::AlignTextToFramePadding();
-            ImGui::Text(Tr("Max:"));
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(90.0f);
-            if (ImGui::InputInt("##IdxMaxOverlay", &idxMax, 0)) {
-                drawSettings.indexCountMax = static_cast<uint32_t>(std::max(0, idxMax));
+            if (ImGui::SmallButton(Tr("Add index range"))) {
+                drawSettings.indexCountRanges.emplace_back();
                 applyDrawSettings();
             }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", Tr("Both bounds are inclusive. Use 4294967295 as the maximum for an open upper bound."));
             ImGui::Unindent(16.0f);
         }
 
@@ -1844,14 +1860,13 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
         }
 
         ImGui::EndDisabled();
-        if (drawSettings.hasGeometryFilter()) {
+        if (drawSettings.hasGeometryFilter() || !drawSettings.indexCountRanges.empty()) {
             ImGui::Spacing();
             if (ImGui::Button(TrLabel("Clear Geometry Filters##Overlay").c_str())) {
                 drawSettings.matchIndexCount = false;
                 drawSettings.matchVertexCount = false;
                 drawSettings.matchInstanceCount = false;
-                drawSettings.indexCountMin = 0;
-                drawSettings.indexCountMax = 0;
+                drawSettings.indexCountRanges.clear();
                 drawSettings.vertexCountMin = 0;
                 drawSettings.vertexCountMax = 0;
                 drawSettings.instanceCountMin = 0;
@@ -1905,30 +1920,24 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
                         ImGui::SameLine();
                         const bool setFilter = ImGui::SmallButton(Tr("Set Filter"));
                         if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(Tr("Lock group geometry filter to exactly %u %s."), d.count, d.isIndexed ? Tr("indices") : Tr("vertices"));
+                            ImGui::SetTooltip(Tr(d.isIndexed ? "Add an index range for exactly %u indices." :
+                                                               "Set the vertex count filter to exactly %u vertices."), d.count);
                         }
                         bool setVertexFilter = false;
                         if (d.indexedVertexCount) {
                             ImGui::SameLine();
                             setVertexFilter = ImGui::SmallButton(Tr("Filter by vertex count"));
                         }
-                        if (setFilter || setVertexFilter) {
+                        if (setFilter && d.isIndexed) {
+                            drawSettings.addObservedIndexCount(d.count);
+                            applyDrawSettings();
+                        } else if (setFilter || setVertexFilter) {
                             drawSettings.suppressDrawCall = true;
-                            drawSettings.matchInstanceCount = true;
-                            drawSettings.instanceCountMin = d.instanceCount;
-                            drawSettings.instanceCountMax = d.instanceCount;
-                            if (d.isIndexed && !setVertexFilter) {
-                                drawSettings.matchIndexCount = true;
-                                drawSettings.indexCountMin = d.count;
-                                drawSettings.indexCountMax = d.count;
-                                drawSettings.matchVertexCount = false;
-                            } else {
-                                drawSettings.matchVertexCount = true;
-                                const uint32_t vertices = d.indexedVertexCount.value_or(d.count);
-                                drawSettings.vertexCountMin = vertices;
-                                drawSettings.vertexCountMax = vertices;
-                                drawSettings.matchIndexCount = false;
-                            }
+                            drawSettings.matchVertexCount = true;
+                            const uint32_t vertices = d.indexedVertexCount.value_or(d.count);
+                            drawSettings.vertexCountMin = vertices;
+                            drawSettings.vertexCountMax = vertices;
+                            drawSettings.matchIndexCount = false;
                             applyDrawSettings();
                         }
                         ImGui::PopID();

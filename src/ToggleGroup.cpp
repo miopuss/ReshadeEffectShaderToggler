@@ -33,6 +33,7 @@
 #include "ToggleGroup.h"
 #include "stdafx.h"
 #include <algorithm>
+#include <charconv>
 #include <sstream>
 #include <vector>
 
@@ -221,12 +222,13 @@ std::string ToggleGroup::configurationSignature() const {
         const ShaderDrawSettings& settings = _shaderDrawSettings.at(key);
         ss << key << ':'
            << settings.suppressDrawCall << ',' << settings.matchIndexCount << ','
-           << settings.indexCountMin << ',' << settings.indexCountMax << ','
            << settings.matchVertexCount << ',' << settings.vertexCountMin << ','
            << settings.vertexCountMax << ',' << settings.matchInstanceCount << ','
            << settings.instanceCountMin << ',' << settings.instanceCountMax << ',' << settings.spatialFilterEnabled;
         for (const auto& region : settings.spatialRegions)
             ss << ',' << region.minX << ',' << region.minY << ',' << region.maxX << ',' << region.maxY;
+        for (const auto& range : settings.indexCountRanges)
+            ss << '|' << range.min << ',' << range.max;
         ss << ';';
     }
 
@@ -438,8 +440,18 @@ void ToggleGroup::saveState(CDataFile& iniFile, int groupCounter) const {
         iniFile.SetUInt(prefix + "Hash", static_cast<uint32_t>(key & 0xFFFFFFFFu), "", drawSettingsCategory);
         iniFile.SetBool(prefix + "Suppress", settings.suppressDrawCall, "", drawSettingsCategory);
         iniFile.SetBool(prefix + "MatchIndex", settings.matchIndexCount, "", drawSettingsCategory);
-        iniFile.SetUInt(prefix + "IndexMin", settings.indexCountMin, "", drawSettingsCategory);
-        iniFile.SetUInt(prefix + "IndexMax", settings.indexCountMax, "", drawSettingsCategory);
+        // Older builds can read the first range. Use an empty interval if the
+        // legacy format cannot represent it without broadening the match.
+        const IndexCountRange first = settings.indexCountRanges.empty() ? IndexCountRange{} : settings.indexCountRanges.front();
+        const bool legacyEmpty = first.max == 0 || first.min == UINT32_MAX;
+        iniFile.SetUInt(prefix + "IndexMin", legacyEmpty ? 2 : first.min, "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "IndexMax", legacyEmpty ? 1 : first.max == UINT32_MAX ? 0 : first.max, "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "IndexRangeCount", static_cast<uint32_t>(settings.indexCountRanges.size()), "", drawSettingsCategory);
+        for (size_t i = 0; i < settings.indexCountRanges.size(); ++i) {
+            const string rangePrefix = prefix + "IndexRange" + std::to_string(i);
+            iniFile.SetUInt(rangePrefix + "Min", settings.indexCountRanges[i].min, "", drawSettingsCategory);
+            iniFile.SetUInt(rangePrefix + "Max", settings.indexCountRanges[i].max, "", drawSettingsCategory);
+        }
         iniFile.SetBool(prefix + "MatchVertex", settings.matchVertexCount, "", drawSettingsCategory);
         iniFile.SetUInt(prefix + "VertexMin", settings.vertexCountMin, "", drawSettingsCategory);
         iniFile.SetUInt(prefix + "VertexMax", settings.vertexCountMax, "", drawSettingsCategory);
@@ -719,8 +731,26 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
             ShaderDrawSettings settings;
             settings.suppressDrawCall = iniFile.GetBoolOrDefault(prefix + "Suppress", loadDrawSettingsCategory, false);
             settings.matchIndexCount = iniFile.GetBoolOrDefault(prefix + "MatchIndex", loadDrawSettingsCategory, false);
-            settings.indexCountMin = readCount(prefix + "IndexMin");
-            settings.indexCountMax = readCount(prefix + "IndexMax");
+            const uint32_t indexRangeCount = iniFile.GetUInt(prefix + "IndexRangeCount", loadDrawSettingsCategory);
+            if (indexRangeCount == UINT_MAX) {
+                const uint32_t min = readCount(prefix + "IndexMin");
+                const uint32_t max = readCount(prefix + "IndexMax");
+                if (settings.matchIndexCount || min != 0 || max != 0)
+                    settings.indexCountRanges.push_back({min, max == 0 ? UINT32_MAX : max});
+            } else {
+                auto readBound = [&](const string& key, uint32_t& value) {
+                    const string text = iniFile.GetValue(key, loadDrawSettingsCategory);
+                    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+                    return result.ec == std::errc{} && result.ptr == text.data() + text.size();
+                };
+                for (uint32_t rangeIndex = 0; rangeIndex < indexRangeCount; ++rangeIndex) {
+                    const string rangePrefix = prefix + "IndexRange" + std::to_string(rangeIndex);
+                    IndexCountRange range;
+                    if (!readBound(rangePrefix + "Min", range.min) || !readBound(rangePrefix + "Max", range.max))
+                        break;
+                    settings.indexCountRanges.push_back(range);
+                }
+            }
             settings.matchVertexCount = iniFile.GetBoolOrDefault(prefix + "MatchVertex", loadDrawSettingsCategory, false);
             settings.vertexCountMin = readCount(prefix + "VertexMin");
             settings.vertexCountMax = readCount(prefix + "VertexMax");
