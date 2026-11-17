@@ -205,11 +205,11 @@ void AddonUIData::StopHuntingMode()
 
 
 /// <summary>
-/// Adds a default group with VK_CAPITAL as toggle key. Only used if there aren't any groups defined in the ini file.
+/// Adds an unbound group with the default settings.
 /// </summary>
-void AddonUIData::AddDefaultGroup()
+void AddonUIData::AddDefaultGroup(const char* name)
 {
-    ToggleGroup toAdd("Default", ToggleGroup::getNewGroupId());
+    ToggleGroup toAdd(name, ToggleGroup::getNewGroupId());
     toAdd.setToggleKey(0);
     toAdd.SetConfigDirtyFlag(&_configDirty);
     _toggleGroups.emplace(toAdd.getId(), toAdd);

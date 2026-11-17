@@ -155,7 +155,7 @@ class AddonUIData {
     std::vector<ShaderToggler::ToggleGroup*> GetToggleGroupsForVertexShaderHash(uint32_t hash) const;
     std::vector<ShaderToggler::ToggleGroup*> GetToggleGroupsForComputeShaderHash(uint32_t hash) const;
     void UpdateToggleGroupsForShaderHashes();
-    void AddDefaultGroup();
+    void AddDefaultGroup(const char* name = "Default");
     ShaderToggler::ToggleGroup* CloneToggleGroup(int sourceGroupId);
     bool IsConfigDirty() const { return _configDirty.load(std::memory_order_acquire); }
     void MarkConfigDirty() { _configDirty.store(true, std::memory_order_release); }

@@ -113,6 +113,97 @@ struct __declspec(novtable) GroupResource final {
     bool owning;
 };
 
+// A normalized screen rectangle (0..1) used by the per-shader "hide by screen selection" filter.
+struct __declspec(novtable) ScreenRegion final {
+    float minX = 0.0f;
+    float minY = 0.0f;
+    float maxX = 0.0f;
+    float maxY = 0.0f;
+
+    bool isValid() const { return maxX > minX && maxY > minY; }
+};
+
+inline bool screenRegionContains(const ScreenRegion& outer, const ScreenRegion& inner) {
+    return outer.minX <= inner.minX && outer.minY <= inner.minY && outer.maxX >= inner.maxX && outer.maxY >= inner.maxY;
+}
+
+// Adds a selection unless a larger region already covers it. A larger new region removes the
+// regions it fully contains, so nested selections are never kept as separate boxes.
+inline bool addScreenRegion(std::vector<ScreenRegion>& regions, const ScreenRegion& region) {
+    if (!region.isValid())
+        return false;
+
+    for (const ScreenRegion& existing : regions) {
+        if (screenRegionContains(existing, region))
+            return false;
+    }
+
+    regions.erase(std::remove_if(regions.begin(), regions.end(), [&region](const ScreenRegion& existing) {
+        return screenRegionContains(region, existing);
+    }), regions.end());
+
+    regions.push_back(region);
+    return true;
+}
+
+// Draw suppression and its geometry filters belong to one shader inside a group, not to the whole
+// group: a group usually contains several shaders and only one of them may need to be skipped.
+struct __declspec(novtable) ShaderDrawSettings final {
+    bool suppressDrawCall = false;
+    bool matchIndexCount = false;
+    uint32_t indexCountMin = 0;
+    uint32_t indexCountMax = 0;
+    bool matchVertexCount = false;
+    uint32_t vertexCountMin = 0;
+    uint32_t vertexCountMax = 0;
+    bool matchInstanceCount = false;
+    uint32_t instanceCountMin = 0;
+    uint32_t instanceCountMax = 0;
+    // Screen-space selection: when enabled, the shader is only hidden where one of these regions
+    // overlaps the draw's scissor rectangle (or viewport).
+    bool spatialFilterEnabled = false;
+    std::vector<ScreenRegion> spatialRegions;
+
+    bool hasGeometryFilter() const { return matchIndexCount || matchVertexCount || matchInstanceCount; }
+    bool hasSpatialFilter() const { return spatialFilterEnabled && !spatialRegions.empty(); }
+    bool isDefault() const { return !suppressDrawCall && !hasGeometryFilter() && !spatialFilterEnabled && spatialRegions.empty(); }
+
+    bool matchesSpatialRegion(float minX, float minY, float maxX, float maxY) const {
+        for (const ScreenRegion& region : spatialRegions) {
+            if (maxX <= region.minX || minX >= region.maxX || maxY <= region.minY || minY >= region.maxY)
+                continue;
+            return true;
+        }
+        return false;
+    }
+
+    bool matchesDrawGeometry(bool isIndexed, uint32_t count, uint32_t instanceCount = 1) const {
+        if (!hasGeometryFilter())
+            return true;
+
+        if (matchInstanceCount) {
+            if (instanceCountMin > 0 && instanceCount < instanceCountMin) return false;
+            if (instanceCountMax > 0 && instanceCount > instanceCountMax) return false;
+        }
+
+        if (isIndexed) {
+            if (matchIndexCount) {
+                if (indexCountMin > 0 && count < indexCountMin) return false;
+                if (indexCountMax > 0 && count > indexCountMax) return false;
+                return true;
+            }
+            return !matchVertexCount;
+        }
+
+        if (matchVertexCount) {
+            if (vertexCountMin > 0 && count < vertexCountMin) return false;
+            if (vertexCountMax > 0 && count > vertexCountMax) return false;
+            return true;
+        }
+        return !matchIndexCount;
+    }
+};
+
 class ToggleGroup {
   public:
     ToggleGroup(std::string name, int Id);
@@ -194,6 +285,80 @@ class ToggleGroup {
     void setRenderToResourceViews(bool render) { if (_renderToResourceViews != render) { _renderToResourceViews = render; markConfigDirty(); } }
     bool getAutoRenderSRV() const { return _autoRenderSRV; }
     void setAutoRenderSRV(bool value) { if (_autoRenderSRV != value) { _autoRenderSRV = value; markConfigDirty(); } }
+    struct ShaderDrawEntry final {
+        uint32_t stage = 0;
+        uint32_t hash = 0;
+        ShaderDrawSettings settings;
+    };
+    using ShaderDrawSnapshot = std::shared_ptr<const std::vector<ShaderDrawEntry>>;
+
+    static uint64_t shaderDrawSettingsKey(uint32_t stage, uint32_t hash) {
+        return (static_cast<uint64_t>(stage) << 32) | static_cast<uint64_t>(hash);
+    }
+
+    /// <summary>
+    /// Returns the settings stored for one shader, or false when it uses the defaults.
+    /// Safe to call from render threads: the data is published as an immutable snapshot.
+    /// </summary>
+    bool GetShaderDrawSettings(uint32_t stage, uint32_t hash, ShaderDrawSettings& out) const {
+        if (hash == 0)
+            return false;
+
+        const ShaderDrawSnapshot snapshot = _shaderDrawSnapshot.load(std::memory_order_acquire);
+        if (snapshot == nullptr)
+            return false;
+
+        const auto it = std::lower_bound(snapshot->begin(), snapshot->end(), shaderDrawSettingsKey(stage, hash), [](const ShaderDrawEntry& entry, uint64_t key) {
+            return shaderDrawSettingsKey(entry.stage, entry.hash) < key;
+        });
+        if (it == snapshot->end() || it->stage != stage || it->hash != hash)
+            return false;
+
+        out = it->settings;
+        return true;
+    }
+
+    /// <summary>
+    /// Returns a shared view of one shader's settings (nullptr when it uses the defaults). The
+    /// returned pointer keeps the immutable snapshot alive, so render threads can hold it without
+    /// copying the settings (and their regions) for every draw.
+    /// </summary>
+    std::shared_ptr<const ShaderDrawSettings> FindShaderDrawSettings(uint32_t stage, uint32_t hash) const {
+        if (hash == 0)
+            return {};
+
+        const ShaderDrawSnapshot snapshot = _shaderDrawSnapshot.load(std::memory_order_acquire);
+        if (snapshot == nullptr)
+            return {};
+
+        const auto it = std::lower_bound(snapshot->begin(), snapshot->end(), shaderDrawSettingsKey(stage, hash), [](const ShaderDrawEntry& entry, uint64_t key) {
+            return shaderDrawSettingsKey(entry.stage, entry.hash) < key;
+        });
+        if (it == snapshot->end() || it->stage != stage || it->hash != hash)
+            return {};
+
+        return std::shared_ptr<const ShaderDrawSettings>(snapshot, &it->settings);
+    }
+
+    /// <summary>
+    /// Stores (or, for an all-default value, removes) the settings for one shader. UI thread only.
+    /// </summary>
+    void SetShaderDrawSettings(uint32_t stage, uint32_t hash, const ShaderDrawSettings& settings) {
+        if (hash == 0)
+            return;
+
+        const uint64_t key = shaderDrawSettingsKey(stage, hash);
+        if (settings.isDefault()) {
+            if (_shaderDrawSettings.erase(key) == 0)
+                return;
+        } else {
+            _shaderDrawSettings[key] = settings;
+        }
+
+        RebuildShaderDrawSnapshot();
+        markConfigDirty();
+    }
+
     bool getHideMarkedShaders() const { return _hideMarkedShaders; }
     void setHideMarkedShaders(bool value) { if (_hideMarkedShaders != value) { _hideMarkedShaders = value; markConfigDirty(); } }
     bool isAutoSceneColourActive(reshade::api::device_api api) const {
@@ -354,6 +519,22 @@ class ToggleGroup {
     const std::unordered_set<EffectData*>& GetPreferredTechniqueData();
 
   private:
+    void RebuildShaderDrawSnapshot() {
+        auto snapshot = std::make_shared<std::vector<ShaderDrawEntry>>();
+        snapshot->reserve(_shaderDrawSettings.size());
+        for (const auto& [key, settings] : _shaderDrawSettings) {
+            ShaderDrawEntry entry;
+            entry.stage = static_cast<uint32_t>(key >> 32);
+            entry.hash = static_cast<uint32_t>(key & 0xFFFFFFFFu);
+            entry.settings = settings;
+            snapshot->push_back(entry);
+        }
+        std::sort(snapshot->begin(), snapshot->end(), [](const ShaderDrawEntry& a, const ShaderDrawEntry& b) {
+            return shaderDrawSettingsKey(a.stage, a.hash) < shaderDrawSettingsKey(b.stage, b.hash);
+        });
+        _shaderDrawSnapshot.store(std::move(snapshot), std::memory_order_release);
+    }
+
     void markConfigDirty() const {
         if (_configDirtyFlag != nullptr)
             _configDirtyFlag->store(true, std::memory_order_release);
@@ -430,6 +611,8 @@ class ToggleGroup {
     volatile bool _copyTextureBinding;
     bool _renderToResourceViews;
     bool _autoRenderSRV = false;
+    std::unordered_map<uint64_t, ShaderDrawSettings> _shaderDrawSettings;
+    std::atomic<ShaderDrawSnapshot> _shaderDrawSnapshot;
     bool _hideMarkedShaders = false;
     uint64_t _debugEffectRenderCalls = 0;
     uint32_t _debugLastRenderedTechniqueCount = 0;

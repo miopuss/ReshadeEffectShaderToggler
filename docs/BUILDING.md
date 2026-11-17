@@ -31,6 +31,33 @@ msbuild /m /p:Configuration=Release /p:Platform=x86 src/ReshadeEffectShaderToggl
 
 The x86 solution configuration maps to Win32. Outputs are `src/x64/Release/ReshadeEffectShaderToggler.addon64` and `src/Win32/Release/ReshadeEffectShaderToggler.addon32`.
 
+## Build English and Simplified Chinese
+
+From the repository root run:
+
+```powershell
+.\build.ps1
+```
+
+The script builds Release binaries for x64 and x86. The English binaries are in
+`dist/Release/en/` and the Simplified Chinese binaries are in `dist/Release/zh/`.
+Each directory contains `.addon64` and `.addon32` files. Install one file for your
+game's architecture and your preferred language. Both languages use the same
+`ReshadeEffectShaderToggler.ini` configuration.
+
+Use `.uild.ps1 -Platform x64 -Language zh` for a Chinese x64 build.
+When invoking MSBuild directly, pass `/p:RestLanguage=zh` for Simplified Chinese.
+Chinese builds use a `-zh` suffix on the output and intermediate configuration
+directories. English is the default for direct builds.
+
+Open **REST** in the ReShade overlay. With an existing ReShade docking layout,
+the REST panel may first appear as a separate window. Drag its title bar onto
+the tab strip to dock it. For the Chinese build, use ReShade's **Settings →
+Overlay & Styling → Global font** to select a font with Simplified Chinese glyphs if
+the current font shows boxes (for example, `C:\Windows\Fonts\msyh.ttc`).
+On a localized ReShade build, selecting Simplified Chinese in ReShade can also
+load its default Chinese font.
+
 ## Checks
 
 ```powershell

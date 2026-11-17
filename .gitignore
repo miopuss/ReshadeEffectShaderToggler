@@ -269,3 +269,7 @@ scripts/__pycache__/
 /SHA256SUMS.txt
 /BG3-Configs-*.zip
 /BG3-Configs-*.txt
+
+/dist/
+/src/Win32/Debug-zh/
+/src/Win32/Release-zh/

@@ -1,5 +1,6 @@
 #pragma once
 #include "resource.h"
+#include "Localization.h"
 #include <imgui.h>
 #include <reshade.hpp>
 #include <tuple>
@@ -7,7 +8,7 @@
 
 static std::string GetResourceData(uint16_t id) {
     HMODULE hModule = NULL;
-    GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCTSTR)GetResourceData, &hModule);
+    GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCTSTR)GetResourceData, &hModule);
 
     HRSRC myResource = ::FindResource(hModule, MAKEINTRESOURCE(id), RT_RCDATA);
 
@@ -27,16 +28,14 @@ static std::string GetResourceData(uint16_t id) {
 static void DisplayAbout() {
     static bool wndOpen = false;
 
-    ImGui::PushItemWidth(ImGui::GetWindowWidth());
-    if (ImGui::Button("About", ImVec2(ImGui::GetWindowWidth(), 0.0f))) {
+    if (ImGui::Button(Tr("About"), ImVec2(-1, 0))) {
         wndOpen = !wndOpen;
     }
-    ImGui::PopItemWidth();
 
     if (wndOpen) {
         ImGui::SetNextWindowSize({ 500, 800 }, ImGuiCond_Once);
-        if (ImGui::Begin("About##Wnd", &wndOpen)) {
-            if (ImGui::BeginChild("About##Licenses", { 0, 0 }, true, ImGuiChildFlags_AlwaysAutoResize)) {
+        if (ImGui::Begin(TrLabel("About###rest_about").c_str(), &wndOpen)) {
+            if (ImGui::BeginChild("##licenses", { 0, 0 }, ImGuiChildFlags_Borders)) {
                 auto lic_REST = GetResourceData(LICENSE_REST);
                 ImGui::TextWrapped("%s", lic_REST.c_str());
 
@@ -65,10 +64,9 @@ static void DisplayAbout() {
                     ImGui::TextWrapped("%s", lic_ImGui.c_str());
                 }
 
-                ImGui::EndChild();
             }
-
-            ImGui::End();
+            ImGui::EndChild();
         }
+        ImGui::End();
     }
 }

@@ -52,8 +52,19 @@ END
 // English (United Kingdom) resources
 
 #if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENG)
+#if REST_LANGUAGE_ZH
+LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
+#pragma code_page(65001)
+#define REST_VERSION_LANG "080404b0"
+#define REST_VERSION_LANG_ID 0x804
+#define REST_PRODUCT_NAME "ReShade 效果着色器切换器"
+#else
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_UK
 #pragma code_page(1252)
+#define REST_VERSION_LANG "040004b0"
+#define REST_VERSION_LANG_ID 0x400
+#define REST_PRODUCT_NAME "ReShade Effect Shader Toggler add-on for ReShade"
+#endif
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -75,21 +86,21 @@ VS_VERSION_INFO VERSIONINFO
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
-        BLOCK "040004b0"
+        BLOCK REST_VERSION_LANG
         BEGIN
             VALUE "CompanyName", "alex / DeViLhoOD"
-            VALUE "FileDescription", "ReShade Effect Shader Toggler add-on for ReShade"
+            VALUE "FileDescription", REST_PRODUCT_NAME
             VALUE "FileVersion", REST_VERSION_STRING
             VALUE "InternalName", "ShaderTo.dll"
             VALUE "LegalCopyright", "Copyright (C) 2022 Frans Bouma, Copyright (C) 2024 alex"
             VALUE "OriginalFilename", "ShaderTo.dll"
-            VALUE "ProductName", "ReShade Effect Shader Toggler add-on for ReShade"
+            VALUE "ProductName", REST_PRODUCT_NAME
             VALUE "ProductVersion", REST_VERSION_STRING
         END
     END
     BLOCK "VarFileInfo"
     BEGIN
-        VALUE "Translation", 0x400, 1200
+        VALUE "Translation", REST_VERSION_LANG_ID, 1200
     END
 END
 

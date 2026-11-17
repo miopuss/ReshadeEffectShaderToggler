@@ -1,3 +1,4 @@
+#include "CDataFile.h"
 #include "DeviceStub.h"
 #include "GlobalResourceView.h"
 #include "ToggleGroup.h"
@@ -58,6 +59,40 @@ int main() {
         concurrent.retire();
         stop.store(true); reader.join();
         Check(concurrent.isRetired() && !concurrent.isActive());
+        ShaderToggler::ToggleGroup filtered("Filtered", 11);
+        filtered.storeCollectedHashes({123}, {123}, {});
+        ShaderToggler::ShaderDrawSettings filter;
+        filter.suppressDrawCall = true;
+        filter.matchIndexCount = true;
+        filter.indexCountMin = 30;
+        filter.indexCountMax = 50;
+        filter.matchInstanceCount = true;
+        filter.instanceCountMin = 2;
+        filter.instanceCountMax = 2;
+        filter.spatialFilterEnabled = true;
+        Check(ShaderToggler::addScreenRegion(filter.spatialRegions, {0.25f, 0.25f, 0.5f, 0.75f}));
+        Check(!ShaderToggler::addScreenRegion(filter.spatialRegions, {0.3f, 0.3f, 0.4f, 0.4f}));
+        filtered.SetShaderDrawSettings(0, 123, filter);
+        const auto savedRule = filtered.FindShaderDrawSettings(0, 123);
+        Check(savedRule && savedRule->matchesDrawGeometry(true, 30, 2) && savedRule->matchesDrawGeometry(true, 50, 2));
+        Check(!savedRule->matchesDrawGeometry(false, 30, 2) && !savedRule->matchesDrawGeometry(true, 51, 2) &&
+              !savedRule->matchesDrawGeometry(true, 30, 1));
+        Check(!filtered.FindShaderDrawSettings(1, 123));
+
+        CDataFile ini;
+        filtered.saveState(ini, 0);
+        CDataFile parsed;
+        Check(parsed.LoadFromString(ini.Serialize()));
+        ShaderToggler::ToggleGroup restored("Restored", 12);
+        restored.loadState(parsed, 0);
+        Check(restored.configurationSignature() == filtered.configurationSignature());
+        const auto restoredRule = restored.FindShaderDrawSettings(0, 123);
+        Check(restoredRule && restoredRule->spatialRegions.size() == 1 && restoredRule->spatialRegions.front().maxY == 0.75f);
+        const auto clone = restored.cloneForNewId(13);
+        Check(static_cast<bool>(clone.FindShaderDrawSettings(0, 123)));
+        restored.storeCollectedHashes({}, {123}, {});
+        Check(!restored.FindShaderDrawSettings(0, 123) && restoredRule->suppressDrawCall);
+        std::puts("Per-shader geometry, region serialization, clone and snapshot checks passed.");
         std::puts("Production view disposal, retained group addresses, terminal retirement, clone and atomic publication checks passed.");
         return 0;
     } catch (const std::exception& e) { std::fprintf(stderr, "%s\n", e.what()); return 1; }

@@ -35,6 +35,7 @@
 #include <reshade_api.hpp>
 #include <assert.h>
 #include "stdafx.h"
+#include "Localization.h"
 
 // Mostly from ReShade, see https://github.com/crosire/reshade/blob/main/source/input.cpp
 namespace ShaderToggler {
@@ -322,7 +323,7 @@ static std::string reshade_key_name(const uint32_t keys) {
 
     assert(key0 != VK_CONTROL && key0 != VK_SHIFT && key0 != VK_MENU);
 
-    return (key1 ? "Ctrl + " : std::string()) + (key2 ? "Shift + " : std::string()) + (key3 ? "Alt + " : std::string()) + vkCodeToString(key0);
+    return (key1 ? "Ctrl + " : std::string()) + (key2 ? Tr("Shift + ") : std::string()) + (key3 ? "Alt + " : std::string()) + Tr(vkCodeToString(key0).c_str());
 }
 
 static uint8_t reshade_last_key_pressed(const reshade::api::effect_runtime* runtime) {

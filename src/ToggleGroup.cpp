@@ -149,6 +149,8 @@ ToggleGroup::ToggleGroup(const ToggleGroup& other)
     _renderToResourceViews = other._renderToResourceViews;
     _autoRenderSRV = other._autoRenderSRV;
     _hideMarkedShaders = other._hideMarkedShaders;
+    _shaderDrawSettings = other._shaderDrawSettings;
+    RebuildShaderDrawSnapshot();
     _renderSrvDescIndex = other._renderSrvDescIndex;
     _renderSrvShaderStage = other._renderSrvShaderStage;
     _renderSrvSlotIndex = other._renderSrvSlotIndex;
@@ -210,6 +212,24 @@ std::string ToggleGroup::configurationSignature() const {
        << _requeueAfterRTMatchingFailure << ';' << _cbModePush << ';'
        << _textureBindingName.size() << ':' << _textureBindingName << ';';
 
+    std::vector<uint64_t> drawSettingKeys;
+    drawSettingKeys.reserve(_shaderDrawSettings.size());
+    for (const auto& [key, _] : _shaderDrawSettings)
+        drawSettingKeys.push_back(key);
+    std::sort(drawSettingKeys.begin(), drawSettingKeys.end());
+    for (const uint64_t key : drawSettingKeys) {
+        const ShaderDrawSettings& settings = _shaderDrawSettings.at(key);
+        ss << key << ':'
+           << settings.suppressDrawCall << ',' << settings.matchIndexCount << ','
+           << settings.indexCountMin << ',' << settings.indexCountMax << ','
+           << settings.matchVertexCount << ',' << settings.vertexCountMin << ','
+           << settings.vertexCountMax << ',' << settings.matchInstanceCount << ','
+           << settings.instanceCountMin << ',' << settings.instanceCountMax << ',' << settings.spatialFilterEnabled;
+        for (const auto& region : settings.spatialRegions)
+            ss << ',' << region.minX << ',' << region.minY << ',' << region.maxX << ',' << region.maxY;
+        ss << ';';
+    }
+
     appendStringSet(_preferredTechniques);
 
     std::vector<std::string> variableNames;
@@ -262,6 +282,15 @@ void ToggleGroup::storeCollectedHashes(const unordered_set<uint32_t> pixelShader
     _pixelShaderHashes = pixelShaderHashes;
     _vertexShaderHashes = vertexShaderHashes;
     _computeShaderHashes = computeShaderHashes;
+    for (auto it = _shaderDrawSettings.begin(); it != _shaderDrawSettings.end();) {
+        const uint32_t stage = static_cast<uint32_t>(it->first >> 32);
+        const uint32_t hash = static_cast<uint32_t>(it->first & 0xFFFFFFFFu);
+        const bool present = stage == 0 ? _pixelShaderHashes.contains(hash) :
+                             stage == 1 ? _vertexShaderHashes.contains(hash) :
+                             stage == 2 ? _computeShaderHashes.contains(hash) : false;
+        it = present ? std::next(it) : _shaderDrawSettings.erase(it);
+    }
+    RebuildShaderDrawSnapshot();
     markConfigDirty();
 }
 
@@ -281,6 +310,8 @@ void ToggleGroup::clearHashes() {
     _pixelShaderHashes.clear();
     _vertexShaderHashes.clear();
     _computeShaderHashes.clear();
+    _shaderDrawSettings.clear();
+    RebuildShaderDrawSnapshot();
 }
 
 void ToggleGroup::setName(string newName) {
@@ -393,6 +424,43 @@ void ToggleGroup::saveState(CDataFile& iniFile, int groupCounter) const {
     iniFile.SetBool("TonemapHDRtoSDRtoHDR", _tonemapHDRtoSDRtoHDR, "", sectionRoot);
     iniFile.SetBool("PreserveTargetAlphaChannel", _preserveAlpha, "", sectionRoot);
     iniFile.SetBool("FlipBuffer", _flipBuffer, "", sectionRoot);
+
+    // Per-shader draw suppression, keyed by (stage << 32 | hash). Only non-default entries are
+    // written so a configuration without suppression stays as small as before.
+    const string drawSettingsCategory = sectionRoot + "_ShaderDrawSettings";
+    int drawSettingIndex = 0;
+    for (const auto& [key, settings] : _shaderDrawSettings) {
+        if (settings.isDefault())
+            continue;
+
+        const string prefix = "Entry" + std::to_string(drawSettingIndex);
+        iniFile.SetUInt(prefix + "Stage", static_cast<uint32_t>(key >> 32), "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "Hash", static_cast<uint32_t>(key & 0xFFFFFFFFu), "", drawSettingsCategory);
+        iniFile.SetBool(prefix + "Suppress", settings.suppressDrawCall, "", drawSettingsCategory);
+        iniFile.SetBool(prefix + "MatchIndex", settings.matchIndexCount, "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "IndexMin", settings.indexCountMin, "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "IndexMax", settings.indexCountMax, "", drawSettingsCategory);
+        iniFile.SetBool(prefix + "MatchVertex", settings.matchVertexCount, "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "VertexMin", settings.vertexCountMin, "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "VertexMax", settings.vertexCountMax, "", drawSettingsCategory);
+        iniFile.SetBool(prefix + "MatchInstance", settings.matchInstanceCount, "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "InstanceMin", settings.instanceCountMin, "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "InstanceMax", settings.instanceCountMax, "", drawSettingsCategory);
+        iniFile.SetBool(prefix + "SpatialFilter", settings.spatialFilterEnabled, "", drawSettingsCategory);
+        const uint32_t regionCount = static_cast<uint32_t>(std::min<size_t>(settings.spatialRegions.size(), 64));
+        iniFile.SetUInt(prefix + "RegionCount", regionCount, "", drawSettingsCategory);
+        for (uint32_t regionIndex = 0; regionIndex < regionCount; ++regionIndex) {
+            const ScreenRegion& region = settings.spatialRegions[regionIndex];
+            const std::string regionPrefix = prefix + "Region" + std::to_string(regionIndex);
+            iniFile.SetValue(regionPrefix + "MinX", std::format("{:.9g}", region.minX), "", drawSettingsCategory);
+            iniFile.SetValue(regionPrefix + "MinY", std::format("{:.9g}", region.minY), "", drawSettingsCategory);
+            iniFile.SetValue(regionPrefix + "MaxX", std::format("{:.9g}", region.maxX), "", drawSettingsCategory);
+            iniFile.SetValue(regionPrefix + "MaxY", std::format("{:.9g}", region.maxY), "", drawSettingsCategory);
+        }
+        ++drawSettingIndex;
+    }
+    if (drawSettingIndex != 0)
+        iniFile.SetUInt("Amount", drawSettingIndex, "", drawSettingsCategory);
 }
 
 static std::vector<std::string> split(std::string& str, char delimiter) {
@@ -632,5 +700,54 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
     _flipBuffer = iniFile.GetBoolOrDefault("FlipBuffer", sectionRoot, false);
 
     _flipBufferBinding = iniFile.GetBoolOrDefault("FlipBufferBinding", sectionRoot, false);
+    _shaderDrawSettings.clear();
+    const string loadDrawSettingsCategory = sectionRoot + "_ShaderDrawSettings";
+    const uint32_t drawSettingCount = iniFile.GetUInt("Amount", loadDrawSettingsCategory);
+    if (drawSettingCount != UINT_MAX) {
+        for (uint32_t i = 0; i < std::min(drawSettingCount, 65536u); ++i) {
+            const string prefix = "Entry" + std::to_string(i);
+            const uint32_t stage = iniFile.GetUInt(prefix + "Stage", loadDrawSettingsCategory);
+            const uint32_t hash = iniFile.GetUInt(prefix + "Hash", loadDrawSettingsCategory);
+            if (stage == UINT_MAX || stage > 2 || hash == UINT_MAX || hash == 0 || !(stage == 0 ? _pixelShaderHashes : stage == 1 ? _vertexShaderHashes : _computeShaderHashes).contains(hash))
+                continue;
+
+            auto readCount = [&iniFile, &loadDrawSettingsCategory](const string& key) {
+                const uint32_t value = iniFile.GetUInt(key, loadDrawSettingsCategory);
+                return value == UINT_MAX ? 0u : value;
+            };
+
+            ShaderDrawSettings settings;
+            settings.suppressDrawCall = iniFile.GetBoolOrDefault(prefix + "Suppress", loadDrawSettingsCategory, false);
+            settings.matchIndexCount = iniFile.GetBoolOrDefault(prefix + "MatchIndex", loadDrawSettingsCategory, false);
+            settings.indexCountMin = readCount(prefix + "IndexMin");
+            settings.indexCountMax = readCount(prefix + "IndexMax");
+            settings.matchVertexCount = iniFile.GetBoolOrDefault(prefix + "MatchVertex", loadDrawSettingsCategory, false);
+            settings.vertexCountMin = readCount(prefix + "VertexMin");
+            settings.vertexCountMax = readCount(prefix + "VertexMax");
+            settings.matchInstanceCount = iniFile.GetBoolOrDefault(prefix + "MatchInstance", loadDrawSettingsCategory, false);
+            settings.instanceCountMin = readCount(prefix + "InstanceMin");
+            settings.instanceCountMax = readCount(prefix + "InstanceMax");
+            settings.spatialFilterEnabled = iniFile.GetBoolOrDefault(prefix + "SpatialFilter", loadDrawSettingsCategory, false);
+
+            auto readFloat = [&iniFile, &loadDrawSettingsCategory](const string& key, float fallback) {
+                const float value = iniFile.GetFloat(key, loadDrawSettingsCategory);
+                return value == FLT_MIN ? fallback : value;
+            };
+            const uint32_t regionCount = std::min(readCount(prefix + "RegionCount"), 64u);
+            for (uint32_t regionIndex = 0; regionIndex < regionCount; ++regionIndex) {
+                const std::string regionPrefix = prefix + "Region" + std::to_string(regionIndex);
+                ScreenRegion region;
+                region.minX = std::clamp(readFloat(regionPrefix + "MinX", 0.0f), 0.0f, 1.0f);
+                region.minY = std::clamp(readFloat(regionPrefix + "MinY", 0.0f), 0.0f, 1.0f);
+                region.maxX = std::clamp(readFloat(regionPrefix + "MaxX", 0.0f), 0.0f, 1.0f);
+                region.maxY = std::clamp(readFloat(regionPrefix + "MaxY", 0.0f), 0.0f, 1.0f);
+                addScreenRegion(settings.spatialRegions, region);
+            }
+
+            if (!settings.isDefault())
+                _shaderDrawSettings[shaderDrawSettingsKey(stage, hash)] = settings;
+        }
+    }
+    RebuildShaderDrawSnapshot();
 }
 }

@@ -353,7 +353,7 @@ static void on_bind_pipeline_states(command_list* cmd_list, uint32_t count, cons
 static void on_bind_viewports(command_list* cmd_list, uint32_t first, uint32_t count, const viewport* viewports) {
     auto& state = *cmd_list->get_private_data<state_tracking>();
 
-    if (state.viewports.size() < (first + count))
+    if ((first == 0 && cmd_list->get_device()->get_api() == device_api::d3d12) || state.viewports.size() < (first + count))
         state.viewports.resize(first + count);
 
     for (uint32_t i = 0; i < count; ++i)
@@ -363,7 +363,7 @@ static void on_bind_viewports(command_list* cmd_list, uint32_t first, uint32_t c
 static void on_bind_scissor_rects(command_list* cmd_list, uint32_t first, uint32_t count, const rect* rects) {
     auto& state = *cmd_list->get_private_data<state_tracking>();
 
-    if (state.scissor_rects.size() < (first + count))
+    if ((first == 0 && cmd_list->get_device()->get_api() == device_api::d3d12) || state.scissor_rects.size() < (first + count))
         state.scissor_rects.resize(first + count);
 
     for (uint32_t i = 0; i < count; ++i)

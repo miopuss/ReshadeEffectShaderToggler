@@ -47,6 +47,17 @@ namespace ShaderToggler {
 /// <summary>
 /// Class which manages a set of shaders for a given type (pixel, vertex...)
 /// </summary>
+struct DrawGeometryStats {
+    bool isIndexed = false;
+    uint32_t count = 0;
+    uint32_t instanceCount = 0;
+    uint32_t invocations = 0;
+
+    bool operator==(const DrawGeometryStats& other) const {
+        return isIndexed == other.isIndexed && count == other.count && instanceCount == other.instanceCount;
+    }
+};
+
 class ShaderManager {
   public:
     explicit ShaderManager(const char* stageName = "unknown");
@@ -96,6 +107,9 @@ class ShaderManager {
         std::unique_lock lock(_markedShaderHashMutex);
         return _markedShaderHashes.erase(hash) > 0;
     }
+    void recordDrawGeometry(uint32_t shaderHash, bool isIndexed, uint32_t count, uint32_t instanceCount);
+    std::vector<DrawGeometryStats> getObservedDrawGeometries() const;
+    void clearObservedDrawGeometries();
     void resetActiveHuntedShader();
 
     size_t getPipelineCount() { return _handleToShaderHash.size(); }
@@ -175,6 +189,8 @@ class ShaderManager {
     mutable std::shared_mutex _collectedActiveHandlesMutex;
     std::shared_mutex _hashHandlesMutex;
     std::shared_mutex _markedShaderHashMutex;
+    std::unordered_map<uint32_t, std::vector<DrawGeometryStats>> _observedDrawGeometries;
+    mutable std::shared_mutex _drawGeometryMutex;
     bool _hideMarkedShaders = false;
 };
 }

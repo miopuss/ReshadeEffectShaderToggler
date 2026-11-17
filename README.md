@@ -54,28 +54,28 @@ For Unreal Engine games this is often the executable under a path such as:
 
 ReShade must be installed against that executable with full add-on support enabled. Copy the supplied `Shaders/REST_*.fx` files into a configured effect search folder and ensure the include path contains `ReShade.fxh`. Back up your INI before replacing a binary or installing example configs; see [Getting started](docs/getting-started.md).
 
-Start the game and open the ReShade overlay. The **Add-ons** tab should list **REST Enhanced — ReShade Effect Shader Toggler**.
+Start the game and open the ReShade overlay. The **Add-ons** tab should list **REST Enhanced — ReShade Effect Shader Toggler**. Open the dedicated **REST** panel to configure it.
 
 ## Basic workflow
 
-1. Open the ReShade overlay and expand **REST Enhanced — ReShade Effect Shader Toggler**.
-2. Click **New group** to create a toggle group.
+1. Open the **REST** panel in the ReShade overlay and select **Toggle Groups**.
+2. Click **New Group** to create a toggle group.
 3. Click **Edit** to give the group a useful name and optional hotkey.
-4. Click **Settings** and keep the relevant scene visible while REST collects active shaders.
+4. Click **Settings**, then **Start shader hunting**. Keep the relevant scene visible while REST collects active shaders.
 5. Use the shader search/filter controls, mouse navigation buttons or configured hunting shortcuts to locate and mark the shader(s) that define the desired boundary.
 6. In **Effects**, select the techniques the group should apply. Enable **Auto scene colour** in the render-target settings when appropriate.
-7. Click **Done**, test the group, then click **Save changes** when the unsaved-changes indicator is shown.
+7. Click **Done hunting**, test the group, then click **Save Changes** when the unsaved-changes indicator is shown.
 
 The saved configuration is written to `ReshadeEffectShaderToggler.ini` beside the add-on. Saves are first written to a verified temporary file, the previous configuration is refreshed as `ReshadeEffectShaderToggler.ini.bak`, and the live INI is then replaced atomically. REST also persists the shader-collection frame count, overlay opacity and configurable hunting shortcuts.
 
 ### Group management
 
-- **Clone** copies a group's shader hashes, effects and settings into a new inactive group with no hotkey, so it can be adjusted safely.
-- **Copy group** places a self-contained REST group INI block on the clipboard; **Import group** restores one without replacing the rest of the configuration. Imported groups start inactive with no hotkey to avoid unexpected rendering changes or shortcut conflicts.
-- **Delete** requires confirmation and is not written to disk until **Save changes** is used.
+- Under **Edit**, **Clone** copies a group's shader hashes, effects and settings into a new inactive group with no hotkey, so it can be adjusted safely.
+- **Copy** places a self-contained REST group INI block on the clipboard; **Import Group** restores one without replacing the rest of the configuration. Imported groups start inactive with no hotkey to avoid unexpected rendering changes or shortcut conflicts.
+- **Delete** requires confirmation and is not written to disk until **Save Changes** is used.
 - Each group shows compact pixel/vertex/compute shader counts, selected-effect count and an **Auto Scene Colour** indicator when enabled.
 - REST warns when group hotkeys conflict with another group or with a configured REST action.
-- The **Saved / Unsaved changes** indicator reflects the configuration that would be written to disk, including the group's persisted Active state.
+- The **All changes saved / Unsaved changes** indicator reflects the configuration that would be written to disk, including the group's persisted Active state.
 
 ## Hiding marked shaders
 
@@ -84,6 +84,10 @@ Enable **Hide marked shaders** in a group's settings to suppress graphics draws 
 A typical `UI` group can contain the shaders used by the HUD, minimap, subtitles or prompts. Assigning a hotkey to that group then provides a convenient way to toggle those elements for screenshots. Games may use several shaders or passes for their interface, so multiple hashes can be collected into the same group.
 
 The feature suppresses graphics draws only. Compute dispatches are deliberately not suppressed because compute shaders may perform lighting, simulation, upscaling or other non-visual pipeline work.
+
+Open **Settings**, choose **Start shader hunting**, then select a shader and expand **Per-shader hiding**. Enable **Suppress draw calls** for that shader. Pixel and vertex shader rules can filter indexed draws by index count, non-indexed draws by vertex count, and both by instance count. A zero bound is open-ended. **Set Filter** uses a draw observed during hunting to fill in the exact count and instance count. An enabled rule takes precedence over the group-wide hide switch for the selected shader.
+
+For direct D3D11 and D3D12 draws, **Hide by screen selection** can limit suppression to drawn regions. Drag to add regions and exit with a right-click or Escape. A region rule leaves a draw intact if REST cannot safely restore its scissor state. Use **Done hunting** to apply the marked shaders, then **Save Changes** to persist the rules.
 
 ## Configuring effects
 
@@ -149,9 +153,9 @@ The traditional defaults remain available for pixel and vertex shader hunting:
 - `Numpad 6`: add/remove the current vertex shader from the group.
 - `Ctrl + Numpad 4` / `Ctrl + Numpad 5`: browse marked vertex shaders.
 
-All hunting shortcuts are configurable under **Shader hunting keybindings**, including optional Mark + Previous/Next bindings, making shader hunting practical on laptops and compact keyboards. The hunting pane is responsive with a 540 px preferred width, uses a second hash column automatically for large filtered result sets when space permits, and retains its width together with search text, filter mode, selected shader stage and preview channel while the current REST session remains open. Compute-shader hunting is also configurable but deliberately has no default shortcut. Shortcut matching uses the exact configured Ctrl/Shift/Alt modifiers, so a plain key does not also fire when a modified version is pressed.
+All hunting shortcuts are configurable under **Keybindings**, including optional Mark + Previous/Next bindings, making shader hunting practical on laptops and compact keyboards. The hunting pane is responsive with a 540 px preferred width, uses a second hash column automatically for large filtered result sets when space permits, and retains its width together with search text, filter mode, selected shader stage and preview channel while the current REST session remains open. Compute-shader hunting is also configurable but deliberately has no default shortcut. Shortcut matching uses the exact configured Ctrl/Shift/Alt modifiers, so a plain key does not also fire when a modified version is pressed.
 
-Use the group's **Active** checkbox or assigned hotkey while testing. When finished, click **Done** and **Save changes**.
+Use the group's **Active** checkbox or assigned hotkey while testing. When finished, click **Done** and **Save Changes**.
 
 Rapid **Prev / Next** navigation uses owned shader-group snapshots, synchronised shader maps and collected lists, and atomic render-visible hunting state. Vulkan snapshots the selected shader for each draw. These fixes address the rapid-navigation crash without adding a button delay. Preview **RGB / R / G / B** controls help inspect individual channels; Vulkan previews wait for a safe copy boundary and do not support Clear alpha processing.
 

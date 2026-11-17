@@ -49,6 +49,9 @@
 #include "crc32_hash.hpp"
 #include <MinHook.h>
 #include <chrono>
+#include <d3d11.h>
+#include <wrl/client.h>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -67,8 +70,13 @@ using namespace std;
 
 extern "C" __declspec(dllexport) const char* NAME = "REST Enhanced — ReShade Effect Shader Toggler";
 extern "C" __declspec(dllexport) const char* AUTHOR = "DeViLhoOD";
+#if REST_LOCALIZED_UI
+extern "C" __declspec(dllexport) const char* DESCRIPTION =
+  "在着色器指定的渲染阶段应用选定的 ReShade 效果，支持为升采样渲染自动注入场景色彩。";
+#else
 extern "C" __declspec(dllexport) const char* DESCRIPTION =
   "ReShade add-on for applying selected effects at shader-defined points in the rendering pipeline, including automatic scene-colour injection for upscaled rendering.";
+#endif
 extern "C" __declspec(dllexport) const char* WEBSITE = "https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler";
 extern "C" __declspec(dllexport) const char* ISSUES = "https://github.com/Pav-Osmolski/ReshadeEffectShaderToggler/issues";
 
@@ -123,7 +131,11 @@ static void onInitDevice(device* device) {
     device->create_private_data<DeviceDataContainer>();
 }
 
+static void releaseScissorEnabledRasterizerStates(ID3D11Device* device);
+
 static void onDestroyDevice(device* device) {
+    if (device->get_api() == device_api::d3d11)
+        releaseScissorEnabledRasterizerStates(reinterpret_cast<ID3D11Device*>(device->get_native()));
     DeviceDataContainer& data = *device->get_private_data<DeviceDataContainer>();
 
     groupResourceManager.DisposeGroupBuffers(device, g_addonUIData.GetToggleGroups());
@@ -693,9 +705,13 @@ static bool onUpdateBufferRegion(device* device, const void* data, resource reso
     return false;
 }
 
-static void displaySettings(effect_runtime* runtime) {
+static void displayRestTab(effect_runtime* runtime) {
     std::lock_guard previewLock(runtime->get_device()->get_private_data<DeviceDataContainer>()->previewMutex);
-    DisplaySettings(g_addonUIData, runtime);
+    DisplayRestTab(g_addonUIData, runtime);
+}
+
+static void displayAddonsTab(effect_runtime*) {
+    DisplayAddonsTab();
 }
 
 static void Init() {
@@ -767,34 +783,250 @@ static void ClearSuppressedCallState(CommandListDataContainer& commandListData, 
                                       (clearMask << (2 * Rendering::MATCH_DELIMITER)));
 }
 
-static bool ShouldSuppressMarkedGraphicsCall(command_list* cmd_list, uint64_t matchModifier) {
-    if (cmd_list == nullptr || cmd_list->get_device() == nullptr)
+struct DrawSuppression {
+    bool hideAll = false;
+    std::vector<ShaderToggler::ScreenRegion> regions;
+};
+
+struct DrawGeometry {
+    bool indexed;
+    uint32_t count;
+    uint32_t instances;
+};
+
+static void EvaluateShaderHiding(const ShaderData& stage, uint32_t stageIndex, const DrawGeometry* geometry, DrawSuppression& result) {
+    if (stage.activeShaderHash == 0 || result.hideAll)
+        return;
+
+    for (const auto* group : stage.blockedShaderGroups) {
+        if (group == nullptr || !group->isActive())
+            continue;
+        const auto settings = group->FindShaderDrawSettings(stageIndex, stage.activeShaderHash);
+        if (!settings || !settings->suppressDrawCall) {
+            if (stageIndex < 2 && group->getHideMarkedShaders()) {
+                result.hideAll = true;
+                return;
+            }
+            continue;
+        }
+        if (settings->hasGeometryFilter() &&
+            (geometry == nullptr || !settings->matchesDrawGeometry(geometry->indexed, geometry->count, geometry->instances)))
+            continue;
+        if (stageIndex < 2 && settings->spatialFilterEnabled) {
+            if (geometry != nullptr)
+                result.regions.insert(result.regions.end(), settings->spatialRegions.begin(), settings->spatialRegions.end());
+            continue;
+        }
+        result.hideAll = true;
+        return;
+    }
+}
+
+static void subtractScreenRect(const reshade::api::rect& cut, std::vector<reshade::api::rect>& pieces) {
+    std::vector<reshade::api::rect> remaining;
+    remaining.reserve(pieces.size() + 4);
+
+    for (const reshade::api::rect& piece : pieces) {
+        const int32_t left = std::max(piece.left, cut.left);
+        const int32_t top = std::max(piece.top, cut.top);
+        const int32_t right = std::min(piece.right, cut.right);
+        const int32_t bottom = std::min(piece.bottom, cut.bottom);
+        if (left >= right || top >= bottom) {
+            remaining.push_back(piece);
+            continue;
+        }
+
+        if (piece.left < cut.left)
+            remaining.push_back(reshade::api::rect{ piece.left, piece.top, cut.left, piece.bottom });
+        if (cut.right < piece.right)
+            remaining.push_back(reshade::api::rect{ cut.right, piece.top, piece.right, piece.bottom });
+        if (piece.top < cut.top)
+            remaining.push_back(reshade::api::rect{ left, piece.top, right, cut.top });
+        if (cut.bottom < piece.bottom)
+            remaining.push_back(reshade::api::rect{ left, cut.bottom, right, piece.bottom });
+    }
+
+    pieces = std::move(remaining);
+}
+
+// Unconditional but throttled diagnostics for the screen-selection filter, so a failing setup can
+// be diagnosed from ReShade.log without enabling the full diagnostic log.
+// D3D11 needs the scissor test enabled in the rasterizer state; games often keep it disabled for
+// 3D draws, so cache one variant per rasterizer description with the scissor test turned on.
+struct ScissorRasterizerStateEntry {
+    ID3D11Device* device;
+    D3D11_RASTERIZER_DESC desc;
+    ID3D11RasterizerState* state;
+};
+
+static std::mutex s_scissorRasterizerStateMutex;
+static std::vector<ScissorRasterizerStateEntry> s_scissorRasterizerStates;
+
+static ID3D11RasterizerState* acquireScissorEnabledRasterizerState(ID3D11Device* device, const D3D11_RASTERIZER_DESC& desc) {
+    if (device == nullptr)
+        return nullptr;
+
+    std::lock_guard<std::mutex> lock(s_scissorRasterizerStateMutex);
+    for (const ScissorRasterizerStateEntry& entry : s_scissorRasterizerStates) {
+        if (entry.device == device && std::memcmp(&entry.desc, &desc, sizeof(desc)) == 0)
+            return entry.state;
+    }
+
+    D3D11_RASTERIZER_DESC scissorDesc = desc;
+    scissorDesc.ScissorEnable = TRUE;
+
+    ID3D11RasterizerState* state = nullptr;
+    if (FAILED(device->CreateRasterizerState(&scissorDesc, &state)) || state == nullptr)
+        return nullptr;
+
+    s_scissorRasterizerStates.push_back({ device, desc, state });
+    return state;
+}
+
+static void releaseScissorEnabledRasterizerStates(ID3D11Device* device) {
+    std::lock_guard<std::mutex> lock(s_scissorRasterizerStateMutex);
+    for (auto it = s_scissorRasterizerStates.begin(); it != s_scissorRasterizerStates.end();) {
+        if (device == nullptr || it->device == device) {
+            it->state->Release();
+            it = s_scissorRasterizerStates.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// Re-records the draw with the scissor set to the part of the draw's area that is outside the
+// selected boxes. Returns true when the original draw must stay suppressed (clipped draws were
+// recorded or the boxes cover the whole draw); false when no box touches the draw.
+static bool clipDrawToScreenRegions(command_list* cmd_list,
+                                    const DrawSuppression& suppression,
+                                    bool indexed,
+                                    uint32_t count,
+                                    uint32_t instanceCount,
+                                    uint32_t first,
+                                    int32_t vertexOffset,
+                                    uint32_t firstInstance) {
+    if (count == 0 || instanceCount == 0)
         return false;
 
-    CommandListDataContainer& commandListData = *cmd_list->get_private_data<CommandListDataContainer>();
+    // D3D12 always enables the scissor test and supports several scissor rectangles in one draw.
+    // D3D11 needs one draw per rectangle and a rasterizer state with the scissor test enabled.
+    const reshade::api::device_api api = cmd_list->get_device()->get_api();
+    if (api != reshade::api::device_api::d3d12 && api != reshade::api::device_api::d3d11) {
+        return false;
+    }
 
-    auto stageRequestsHide = [](const ShaderData& stage) {
-        return std::any_of(stage.blockedShaderGroups.begin(), stage.blockedShaderGroups.end(), [](const ToggleGroup* group) {
-            return group != nullptr && group->isActive() && group->getHideMarkedShaders();
-        });
+    const bool d3d11 = api == device_api::d3d11;
+    auto* context = d3d11 ? reinterpret_cast<ID3D11DeviceContext*>(cmd_list->get_native()) : nullptr;
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState> originalRasterizer;
+    D3D11_RASTERIZER_DESC rasterizerDesc{};
+    reshade::api::viewport viewport{};
+    reshade::api::rect savedScissor{};
+    UINT scissorCount = 1;
+    if (d3d11) {
+        if (context == nullptr)
+            return false;
+
+        // Read the effective native state, including the default null rasterizer.
+        context->RSGetState(originalRasterizer.GetAddressOf());
+        if (originalRasterizer) {
+            originalRasterizer->GetDesc(&rasterizerDesc);
+        } else {
+            rasterizerDesc.FillMode = D3D11_FILL_SOLID;
+            rasterizerDesc.CullMode = D3D11_CULL_BACK;
+            rasterizerDesc.DepthClipEnable = TRUE;
+        }
+
+        UINT viewportCount = 0;
+        context->RSGetViewports(&viewportCount, nullptr);
+        context->RSGetScissorRects(&scissorCount, nullptr);
+        if (viewportCount != 1 || scissorCount > 1 || (rasterizerDesc.ScissorEnable && scissorCount == 0))
+            return false;
+        D3D11_VIEWPORT nativeViewport{};
+        context->RSGetViewports(&viewportCount, &nativeViewport);
+        viewport = {nativeViewport.TopLeftX, nativeViewport.TopLeftY, nativeViewport.Width, nativeViewport.Height,
+                    nativeViewport.MinDepth, nativeViewport.MaxDepth};
+        if (scissorCount == 1) {
+            D3D11_RECT rect{};
+            context->RSGetScissorRects(&scissorCount, &rect);
+            savedScissor = {rect.left, rect.top, rect.right, rect.bottom};
+        }
+    } else {
+        auto* state = cmd_list->get_private_data<state_tracking>();
+        if (state == nullptr || state->viewports.size() != 1 || state->scissor_rects.size() != 1)
+            return false;
+        viewport = state->viewports.front();
+        savedScissor = state->scissor_rects.front();
+    }
+
+    if (viewport.width <= 0.0f || viewport.height <= 0.0f)
+        return false;
+
+    const auto toPixelX = [&viewport](float value) {
+        return static_cast<int32_t>(std::lround(viewport.x + value * viewport.width));
+    };
+    const auto toPixelY = [&viewport](float value) {
+        return static_cast<int32_t>(std::lround(viewport.y + value * viewport.height));
     };
 
-    const bool suppressPS =
-      (matchModifier & Rendering::MATCH_PS) != 0 &&
-      commandListData.ps.activeShaderHash != 0 &&
-      stageRequestsHide(commandListData.ps);
-    const bool suppressVS =
-      (matchModifier & Rendering::MATCH_VS) != 0 &&
-      commandListData.vs.activeShaderHash != 0 &&
-      stageRequestsHide(commandListData.vs);
-
-    if (!suppressPS && !suppressVS)
+    const reshade::api::rect viewportRect{toPixelX(0.0f), toPixelY(0.0f), toPixelX(1.0f), toPixelY(1.0f)};
+    reshade::api::rect base = d3d11 && !rasterizerDesc.ScissorEnable ? viewportRect : savedScissor;
+    base.left = std::max(base.left, viewportRect.left);
+    base.top = std::max(base.top, viewportRect.top);
+    base.right = std::min(base.right, viewportRect.right);
+    base.bottom = std::min(base.bottom, viewportRect.bottom);
+    if (base.right <= base.left || base.bottom <= base.top) {
         return false;
+    }
 
-    // Keep blockedShaderGroups intact here. The same pipeline may issue multiple
-    // draws without another bind_pipeline callback, and every matching draw must
-    // remain hidden until the game actually changes the bound shader.
-    ClearSuppressedCallState(commandListData, matchModifier, false);
+    std::vector<reshade::api::rect> pieces{ base };
+    uint32_t intersectingBoxes = 0;
+    for (const ShaderToggler::ScreenRegion& region : suppression.regions) {
+        reshade::api::rect box{ toPixelX(region.minX), toPixelY(region.minY), toPixelX(region.maxX), toPixelY(region.maxY) };
+        box.left = std::clamp(box.left, base.left, base.right);
+        box.top = std::clamp(box.top, base.top, base.bottom);
+        box.right = std::clamp(box.right, base.left, base.right);
+        box.bottom = std::clamp(box.bottom, base.top, base.bottom);
+        if (box.right <= box.left || box.bottom <= box.top)
+            continue;
+
+        ++intersectingBoxes;
+        subtractScreenRect(box, pieces);
+        if (pieces.empty())
+            break;
+        if (pieces.size() > 64)
+            return false;
+    }
+
+    if (intersectingBoxes == 0)
+        return false;
+    if (pieces.empty())
+        return true;
+
+    const bool changedRasterizer = d3d11 && !rasterizerDesc.ScissorEnable;
+    if (changedRasterizer) {
+        auto* device = reinterpret_cast<ID3D11Device*>(cmd_list->get_device()->get_native());
+        auto* scissorState = acquireScissorEnabledRasterizerState(device, rasterizerDesc);
+        if (scissorState == nullptr)
+            return false;
+        context->RSSetState(scissorState);
+    }
+
+    for (const reshade::api::rect& piece : pieces) {
+        cmd_list->bind_scissor_rects(0, 1, &piece);
+        if (indexed)
+            cmd_list->draw_indexed(count, instanceCount, first, vertexOffset, firstInstance);
+        else
+            cmd_list->draw(count, instanceCount, first, firstInstance);
+    }
+
+    if (scissorCount == 0)
+        context->RSSetScissorRects(0, nullptr);
+    else
+        cmd_list->bind_scissor_rects(0, 1, &savedScissor);
+    if (changedRasterizer)
+        context->RSSetState(originalRasterizer.Get());
+
     return true;
 }
 
@@ -847,60 +1079,71 @@ static bool ShouldSuppressVulkanHuntedCall(command_list* cmd_list, uint64_t matc
     return true;
 }
 
-static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) {
-    if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS) ||
-        ShouldSuppressMarkedGraphicsCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS))
+static bool HandleGraphicsDraw(command_list* cmd_list, const DrawGeometry* geometry,
+                               uint32_t first = 0, int32_t vertexOffset = 0, uint32_t firstInstance = 0) {
+    constexpr uint64_t stages = Rendering::MATCH_PS | Rendering::MATCH_VS;
+    auto& cmdData = *cmd_list->get_private_data<CommandListDataContainer>();
+    if (geometry != nullptr) {
+        g_pixelShaderManager.recordDrawGeometry(cmdData.ps.activeShaderHash, geometry->indexed, geometry->count, geometry->instances);
+        g_vertexShaderManager.recordDrawGeometry(cmdData.vs.activeShaderHash, geometry->indexed, geometry->count, geometry->instances);
+    }
+    if (ShouldSuppressVulkanHuntedCall(cmd_list, stages))
         return true;
 
-    CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
-
-    return false;
+    DrawSuppression suppression;
+    EvaluateShaderHiding(cmdData.ps, 0, geometry, suppression);
+    EvaluateShaderHiding(cmdData.vs, 1, geometry, suppression);
+    if (suppression.hideAll) {
+        ClearSuppressedCallState(cmdData, stages, false);
+        return true;
+    }
+    CheckDrawCall(cmd_list, stages);
+    return geometry != nullptr && !suppression.regions.empty() &&
+           clipDrawToScreenRegions(cmd_list, suppression, geometry->indexed, geometry->count, geometry->instances,
+                                   first, vertexOffset, firstInstance);
 }
 
-static bool onDispatch(command_list* cmd_list, uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z) {
+static bool HandleComputeDispatch(command_list* cmd_list) {
     if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_CS))
         return true;
 
-    CheckDrawCall(cmd_list, Rendering::MATCH_CS);
-
-    return false;
-}
-
-static bool onDrawIndexed(command_list* cmd_list,
-                          uint32_t index_count,
-                          uint32_t instance_count,
-                          uint32_t first_index,
-                          int32_t vertex_offset,
-                          uint32_t first_instance) {
-    if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS) ||
-        ShouldSuppressMarkedGraphicsCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS))
+    auto& cmdData = *cmd_list->get_private_data<CommandListDataContainer>();
+    DrawSuppression suppression;
+    EvaluateShaderHiding(cmdData.cs, 2, nullptr, suppression);
+    if (suppression.hideAll) {
+        ClearSuppressedCallState(cmdData, Rendering::MATCH_CS, false);
         return true;
-
-    CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
-
+    }
+    CheckDrawCall(cmd_list, Rendering::MATCH_CS);
     return false;
 }
 
-static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command type, resource buffer, uint64_t offset, uint32_t draw_count, uint32_t stride) {
+static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) {
+    const DrawGeometry geometry{false, vertex_count, instance_count};
+    return HandleGraphicsDraw(cmd_list, &geometry, first_vertex, 0, first_instance);
+}
+
+static bool onDispatch(command_list* cmd_list, uint32_t, uint32_t, uint32_t) {
+    return HandleComputeDispatch(cmd_list);
+}
+
+static bool onDrawIndexed(command_list* cmd_list, uint32_t index_count, uint32_t instance_count,
+                          uint32_t first_index, int32_t vertex_offset, uint32_t first_instance) {
+    const DrawGeometry geometry{true, index_count, instance_count};
+    return HandleGraphicsDraw(cmd_list, &geometry, first_index, vertex_offset, first_instance);
+}
+
+static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command type, resource, uint64_t, uint32_t, uint32_t) {
     switch (type) {
-        case indirect_command::unknown:
-            CheckDrawCall(cmd_list);
-            break;
         case indirect_command::draw:
         case indirect_command::draw_indexed:
-            if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS) ||
-                ShouldSuppressMarkedGraphicsCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS))
-                return true;
-            CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
-            break;
+            return HandleGraphicsDraw(cmd_list, nullptr);
         case indirect_command::dispatch:
-            if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_CS))
-                return true;
-            CheckDrawCall(cmd_list, Rendering::MATCH_CS);
-            break;
+            return HandleComputeDispatch(cmd_list);
+        default:
+            CheckDrawCall(cmd_list);
+            return false;
     }
-
-    return false;
 }
 
 /// <summary>
@@ -967,7 +1210,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID) {
             reshade::register_event<reshade::addon_event::draw_indexed>(onDrawIndexed);
             reshade::register_event<reshade::addon_event::draw_or_dispatch_indirect>(onDrawOrDispatchIndirect);
 
-            reshade::register_overlay(nullptr, &displaySettings);
+            reshade::register_overlay("REST", &displayRestTab);
+            reshade::register_overlay(nullptr, &displayAddonsTab);
             break;
         case DLL_PROCESS_DETACH:
             UnInit();
@@ -1011,7 +1255,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID) {
             reshade::unregister_event<reshade::addon_event::draw_indexed>(onDrawIndexed);
             reshade::unregister_event<reshade::addon_event::draw_or_dispatch_indirect>(onDrawOrDispatchIndirect);
 
-            reshade::unregister_overlay(nullptr, &displaySettings);
+            reshade::unregister_overlay("REST", &displayRestTab);
+            reshade::unregister_overlay(nullptr, &displayAddonsTab);
 
             state_tracking::unregister_events();
 
