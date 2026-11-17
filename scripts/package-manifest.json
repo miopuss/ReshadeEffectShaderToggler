@@ -4,6 +4,7 @@
     "ReshadeEffectShaderToggler.addon32": "src/Win32/Release/ReshadeEffectShaderToggler.addon32",
     "LICENSE": "LICENSE",
     "README.md": "README.md",
+    "README.zh-CN.md": "README.zh-CN.md",
     "CHANGELOG.md": "CHANGELOG.md",
     "Shaders": "Shaders",
     "docs": "docs"

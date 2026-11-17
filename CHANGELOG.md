@@ -5,7 +5,7 @@
 - First release under the REST Enhanced+ name and the three-part version scheme.
 - Includes the dedicated REST overlay, Simplified Chinese localization, per-shader hiding, multiple index-count ranges, distinct vertex counts for supported D3D11 and D3D12 draws, and screen-region clipping.
 - Includes the existing Vulkan scene-colour safety fixes and per-game scene-transfer preference.
-- The [v1.0.0 release notes](docs/releases/v1.0.0.md) consolidate the previous releases from this fork. Earlier entries below retain the original version numbers.
+- See the [v1.0.0 release notes](docs/releases/v1.0.0.md) for the current download and feature summary.
 
 ## v1.7.8.680 — 2026-11-17
 

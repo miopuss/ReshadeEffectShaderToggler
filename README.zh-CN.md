@@ -1,0 +1,51 @@
+# REST Enhanced+ — ReShade 效果着色器切换器
+
+**简体中文** · [English](README.md)
+
+REST Enhanced+ 是一个 ReShade 插件。它能在指定的游戏着色器绘制前应用 ReShade 效果，也可以按着色器隐藏 HUD 等界面元素。例如，可在游戏绘制 HUD 前应用环境光遮蔽，使 HUD 保持清晰。
+
+## 下载与安装
+
+1. 安装支持插件的 **ReShade 6.8 或更新版本**。
+2. 在 [GitHub Releases](https://github.com/miopuss/ReshadeEffectShaderToggler/releases/latest) 下载 `release.zh-CN.zip`。
+3. 64 位游戏使用 `ReshadeEffectShaderToggler.addon64`，32 位游戏使用 `ReshadeEffectShaderToggler.addon32`。将一个对应架构的插件放到 ReShade DLL 所在的游戏目录。
+4. 启动游戏，在 ReShade 叠加层中打开 **REST**。如果汉字显示为方框，请选择支持简体中文的 ReShade 全局字体。
+
+插件使用 `ReshadeEffectShaderToggler.ini` 保存配置。各图形 API 的功能区别见[兼容性](README.md#compatibility)。
+
+## 创建切换组
+
+1. 在 REST 中新建一个组，可为它设置快捷键。
+2. 打开组的「设置」，开始着色器查找。让想定位的 HUD 或场景元素出现在屏幕上，切换候选项并标记对应的着色器。
+3. 在技术项列表中选择需要运行的效果，也可在组里开启隐藏已标记着色器。
+4. 完成查找，启用切换组验证效果，然后保存设置。
+
+查找列表支持按哈希搜索、按标记状态筛选和重新扫描。快捷键可在「快捷键」页修改。ReShade 中已禁用的效果不会由切换组强制运行，所选技术仍按 ReShade 的全局顺序执行。
+
+## 组合使用索引范围与屏幕框选
+
+如果同一个索引数命中了要隐藏和要保留的 UI，可以在同一着色器上同时使用这两个条件。
+
+1. 开启「抑制绘制调用」，在「几何细节筛选」里开启「按索引数筛选」，设置目标范围，例如 `156–156`。观察列表里的「设为筛选」会追加一个精确范围，已有实例数设置会保留。
+2. 开启「按框选区域隐藏」，点击「框选」，只拖出包含目标 UI 的矩形。按 Esc 或右键退出。
+3. 完成查找并保存设置。
+
+对受支持的 D3D11 和 D3D12 直接绘制，插件先匹配索引数，再裁掉匹配绘制落在框内的像素。即使两部分 UI 来自同一次绘制，框外部分也会保留。框内重叠的部分会一起被裁掉。多个索引范围命中任意一条即可，可在筛选面板中编辑或移除。
+
+## 自动场景颜色
+
+对使用 DLSS 或动态分辨率的游戏，可在组的渲染目标设置里开启「自动场景颜色」。插件按宽高比识别当前场景目标，必要时先将场景复制到原生分辨率的中间目标，在该分辨率处理所选效果，再写回场景。这样后续绘制的 HUD 仍可以覆盖在效果上。额外的复制和全分辨率效果会增加 GPU 开销。
+
+Vulkan 的场景传输选项默认关闭，保存后需要重启游戏才会生效。详细的支持范围和排错说明见[自动场景颜色](docs/automatic-scene-colour.md)与[Vulkan 场景传输设置](docs/vulkan-scene-transfer-setting.md)。
+
+## 构建与文档
+
+- [构建与打包](docs/BUILDING.md)
+- [故障排查](docs/troubleshooting.md)
+- [更新日志](CHANGELOG.md)
+
+## 致谢
+
+- [miopuss](https://github.com/miopuss) 维护此分支，提供简体中文本地化、绘制筛选、多索引范围、观察列表填入条件和屏幕区域隐藏等功能。
+- [BadassBaboon](https://github.com/BadassBaboon/ReshadeEffectShaderToggler) 提供本分支复用的 UI 设计。
+- 上游开发者和其他贡献者见[完整致谢](README.md#credits)。项目保留上游的[许可证与声明](LICENSE)。

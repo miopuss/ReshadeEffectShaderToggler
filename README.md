@@ -1,5 +1,7 @@
 # REST Enhanced+ — ReShade Effect Shader Toggler
 
+[简体中文](README.zh-CN.md) · **English**
+
 [![MSBuild](https://github.com/miopuss/ReshadeEffectShaderToggler/actions/workflows/msbuild.yml/badge.svg)](https://github.com/miopuss/ReshadeEffectShaderToggler/actions/workflows/msbuild.yml)
 [![Release](https://img.shields.io/github/v/release/miopuss/ReshadeEffectShaderToggler?label=release)](https://github.com/miopuss/ReshadeEffectShaderToggler/releases/latest)
 
@@ -99,8 +101,6 @@ If an index count matches both the HUD element you want to hide and a separate e
 
 REST first matches draws against any listed index range, then suppresses only the pixels those draws produce inside the selected boxes. This also works when a single draw contains both elements, as long as the part you want to keep stays outside the boxes. If matching elements overlap inside a box, both are clipped there.
 
-**简体中文**：在同一着色器的「几何细节筛选」中，同时开启「按索引数筛选」和「按框选区域隐藏」。例如填入 `156–156`，再只框住要隐藏的 UI。插件先匹配索引数，再裁掉匹配绘制落在框内的像素。想保留的 UI 位于框外时，即使它和目标 UI 属于同一次绘制，也可以保留。
-
 ## Configuring effects
 
 Each group can control a subset of the techniques currently known to ReShade. Techniques are executed in their global ReShade order.
@@ -193,9 +193,9 @@ See [Building and packaging](docs/BUILDING.md) for prerequisites, pinned depende
 
 Build-affecting pull requests validate on opened, reopened and ready-for-review, not on every pushed commit. Keep the PR in draft while revising it, then mark it ready for review to validate the final merge result. If an already-ready PR changes again, return it to draft and mark it ready again (or reopen it) to refresh required PR checks. Manual MSBuild dispatch remains available for branch test builds; those runs may not satisfy PR-associated merge checks. Workflow-only changes also run lightweight YAML/PowerShell checks. Tagged releases use the format:
 
-`vMAJOR.MINOR.PATCH.RESHADE`
+`vMAJOR.MINOR.PATCH`
 
-For example: `v1.7.3.680`.
+For example, `v1.0.0`.
 
 See [Release Process](docs/RELEASING.md) for the release checklist and packaging details.
 
@@ -211,7 +211,7 @@ See [Release Process](docs/RELEASING.md) for the release checklist and packaging
 - [Marty McFly](https://github.com/martymcmodding) - constant-buffer extraction idea.
 - [darkarchan](https://github.com/darkarchan) - testing and contributions.
 
-- [BadassBaboon](https://github.com/BadassBaboon/ReshadeEffectShaderToggler) - UI design reused in this fork. BadassBaboon and CrazyDaifu also contributed D3D9 surface/reset and removed-group lifetime fixes; see [fork attribution](docs/maintenance-release-validation.md#attribution) and [license notice](docs/fork-license.txt).
+- [BadassBaboon](https://github.com/BadassBaboon/ReshadeEffectShaderToggler) - UI design reused in this fork.
 
 ## Licence
 
