@@ -52,9 +52,11 @@ struct DrawGeometryStats {
     uint32_t count = 0;
     uint32_t instanceCount = 0;
     uint32_t invocations = 0;
+    std::optional<uint32_t> indexedVertexCount;
 
     bool operator==(const DrawGeometryStats& other) const {
-        return isIndexed == other.isIndexed && count == other.count && instanceCount == other.instanceCount;
+        return isIndexed == other.isIndexed && count == other.count && instanceCount == other.instanceCount &&
+               indexedVertexCount == other.indexedVertexCount;
     }
 };
 
@@ -107,7 +109,8 @@ class ShaderManager {
         std::unique_lock lock(_markedShaderHashMutex);
         return _markedShaderHashes.erase(hash) > 0;
     }
-    void recordDrawGeometry(uint32_t shaderHash, bool isIndexed, uint32_t count, uint32_t instanceCount);
+    void recordDrawGeometry(uint32_t shaderHash, bool isIndexed, uint32_t count, uint32_t instanceCount,
+                            std::optional<uint32_t> indexedVertexCount = std::nullopt);
     std::vector<DrawGeometryStats> getObservedDrawGeometries() const;
     void clearObservedDrawGeometries();
     void resetActiveHuntedShader();

@@ -1,6 +1,7 @@
 #include "CDataFile.h"
 #include "DeviceStub.h"
 #include "GlobalResourceView.h"
+#include "PipelinePrivateData.h"
 #include "ToggleGroup.h"
 #include <map>
 #include <thread>
@@ -78,6 +79,51 @@ int main() {
         Check(!savedRule->matchesDrawGeometry(false, 30, 2) && !savedRule->matchesDrawGeometry(true, 51, 2) &&
               !savedRule->matchesDrawGeometry(true, 30, 1));
         Check(!filtered.FindShaderDrawSettings(1, 123));
+
+        ShaderToggler::ShaderDrawSettings vertices;
+        vertices.matchVertexCount = true;
+        vertices.vertexCountMin = 4;
+        vertices.vertexCountMax = 4;
+        Check(vertices.matchesDrawGeometry(false, 4));
+        Check(!vertices.matchesDrawGeometry(false, 6));
+        Check(vertices.matchesDrawGeometry(true, 6, 1, 4));
+        Check(!vertices.matchesDrawGeometry(true, 6, 1, 5));
+        Check(!vertices.matchesDrawGeometry(true, 4));
+        vertices.matchIndexCount = true;
+        vertices.indexCountMin = 6;
+        vertices.indexCountMax = 6;
+        Check(vertices.matchesDrawGeometry(true, 6));
+        Check(!vertices.matchesDrawGeometry(true, 4, 1, 4));
+        Check(vertices.matchesDrawGeometry(false, 4));
+
+        DeviceDataContainer::IndexBufferSnapshot snapshot;
+        const uint16_t indices16[] = {99, 0, 1, 2, 2, 3, 0, UINT16_MAX};
+        snapshot.bytes.resize(sizeof(indices16));
+        std::memcpy(snapshot.bytes.data(), indices16, sizeof(indices16));
+        snapshot.offset = 32;
+        auto uploadRevision = std::make_shared<uint64_t>(1);
+        snapshot.uploadRevision = uploadRevision;
+        snapshot.capturedRevision = 1;
+        Check(snapshot.countDistinct(34, 6, 2, IndexStripCut::unknown) == 4);
+        Check(snapshot.countDistinct(34, 7, 2, IndexStripCut::disabled) == 5);
+        Check(snapshot.countDistinct(34, 7, 2, IndexStripCut::enabled) == 4);
+        Check(!snapshot.countDistinct(34, 7, 2, IndexStripCut::unknown));
+        Check(!snapshot.countDistinct(32, 9, 2, IndexStripCut::disabled));
+        Check(!snapshot.countDistinct(30, 2, 2, IndexStripCut::disabled));
+        const uint32_t indices32[] = {70000, 70001, 70000, 70003};
+        DeviceDataContainer::IndexBufferSnapshot wideIndices;
+        wideIndices.bytes.resize(sizeof(indices32));
+        std::memcpy(wideIndices.bytes.data(), indices32, sizeof(indices32));
+        Check(wideIndices.countDistinct(0, 4, 4, IndexStripCut::disabled) == 3);
+        ++*uploadRevision;
+        Check(!snapshot.countDistinct(34, 6, 2, IndexStripCut::unknown));
+
+        D3D12IndexBufferWrites ranges;
+        ranges.recordRange(32, 12, D3D12IndexBufferCopy{{1}, 7, 0, 32, 12});
+        ranges.recordRange(64, 16, D3D12IndexBufferCopy{{1}, 7, 20, 64, 16});
+        Check(ranges.copies.size() == 2);
+        ranges.recordRange(34, 2, std::nullopt);
+        Check(ranges.copies.size() == 1 && ranges.copies.front().destOffset == 64);
 
         CDataFile ini;
         filtered.saveState(ini, 0);

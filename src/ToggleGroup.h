@@ -37,6 +37,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -177,7 +178,8 @@ struct __declspec(novtable) ShaderDrawSettings final {
         return false;
     }
 
-    bool matchesDrawGeometry(bool isIndexed, uint32_t count, uint32_t instanceCount = 1) const {
+    bool matchesDrawGeometry(bool isIndexed, uint32_t count, uint32_t instanceCount = 1,
+                             std::optional<uint32_t> indexedVertexCount = std::nullopt) const {
         if (!hasGeometryFilter())
             return true;
 
@@ -192,7 +194,11 @@ struct __declspec(novtable) ShaderDrawSettings final {
                 if (indexCountMax > 0 && count > indexCountMax) return false;
                 return true;
             }
-            return !matchVertexCount;
+            if (!matchVertexCount)
+                return true;
+            if (!indexedVertexCount)
+                return false;
+            count = *indexedVertexCount;
         }
 
         if (matchVertexCount) {

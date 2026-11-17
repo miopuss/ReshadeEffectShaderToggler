@@ -5,6 +5,9 @@
 #include "ToggleGroup.h"
 #include "reshade.hpp"
 #include <chrono>
+#include <cstring>
+#include <map>
+#include <memory>
 #include <shared_mutex>
 #include <mutex>
 #include <tuple>
@@ -54,6 +57,36 @@ struct __declspec(novtable) ShaderData final {
     }
 };
 
+enum class IndexStripCut { disabled, enabled, unknown };
+
+struct D3D12IndexBufferBinding {
+    reshade::api::resource buffer{};
+    uint64_t offset = 0;
+    uint32_t indexSize = 0;
+};
+
+struct D3D12IndexBufferCopy {
+    reshade::api::resource source{};
+    uint64_t sourceId = 0;
+    uint64_t sourceOffset = 0;
+    uint64_t destOffset = 0;
+    uint64_t size = 0;
+};
+
+struct D3D12IndexBufferWrites {
+    uint64_t serial = 0;
+    std::vector<D3D12IndexBufferCopy> copies;
+
+    void recordRange(uint64_t offset, uint64_t size, std::optional<D3D12IndexBufferCopy> copy) {
+        // A later write can replace any part of a previously tracked range.
+        std::erase_if(copies, [=](const D3D12IndexBufferCopy& old) {
+            return offset < old.destOffset + old.size && old.destOffset < offset + size;
+        });
+        if (copy && copies.size() < 256)
+            copies.push_back(*copy);
+    }
+};
+
 struct __declspec(uuid("222F7169-3C09-40DB-9BC9-EC53842CE537")) CommandListDataContainer {
     uint64_t commandQueue = 0;
     bool vulkanAutoInjectionActive = false;
@@ -61,6 +94,10 @@ struct __declspec(uuid("222F7169-3C09-40DB-9BC9-EC53842CE537")) CommandListDataC
     bool vulkanRenderPassEndPending = false;
     bool vulkanRenderPassSuspends = false;
     bool d3d12InsideRenderPass = false;
+    D3D12IndexBufferBinding d3d12IndexBuffer;
+    IndexStripCut d3d12IndexStripCut = IndexStripCut::unknown;
+    std::unordered_map<uint64_t, D3D12IndexBufferWrites> d3d12IndexWrites;
+    bool d3d12UnknownIndexAlias = false;
     ShaderData ps{ 0 };
     ShaderData vs{ 1 };
     ShaderData cs{ 2 };
@@ -76,6 +113,10 @@ struct __declspec(uuid("222F7169-3C09-40DB-9BC9-EC53842CE537")) CommandListDataC
         vulkanRenderPassEndPending = false;
         vulkanRenderPassSuspends = false;
         d3d12InsideRenderPass = false;
+        d3d12IndexBuffer = {};
+        d3d12IndexStripCut = IndexStripCut::unknown;
+        d3d12IndexWrites.clear();
+        d3d12UnknownIndexAlias = false;
     }
 };
 
@@ -176,6 +217,71 @@ struct __declspec(novtable) BindingManagerData final {
 };
 
 struct __declspec(uuid("C63E95B1-4E2F-46D6-A276-E8B4612C069A")) DeviceDataContainer {
+    struct IndexBufferSnapshot {
+        uint64_t offset = 0;
+        std::vector<uint8_t> bytes;
+        std::map<std::tuple<uint64_t, uint32_t, uint32_t, IndexStripCut>, std::optional<uint32_t>> vertexCounts;
+        std::shared_ptr<const uint64_t> uploadRevision;
+        uint64_t capturedRevision = 0;
+
+        bool isCurrent() const {
+            return !uploadRevision || *uploadRevision == capturedRevision;
+        }
+
+        bool contains(uint64_t start, uint64_t length) const {
+            return start >= offset && start - offset <= bytes.size() && length <= bytes.size() - (start - offset);
+        }
+
+        std::optional<uint32_t> countDistinct(uint64_t start, uint32_t indexCount, uint32_t indexSize, IndexStripCut cut) {
+            if (!isCurrent() || (indexSize != 2 && indexSize != 4) || !contains(start, uint64_t{indexCount} * indexSize))
+                return std::nullopt;
+            if (indexCount == 0)
+                return 0;
+            const auto key = std::make_tuple(start, indexCount, indexSize, cut);
+            const auto cached = vertexCounts.find(key);
+            if (cached != vertexCounts.end())
+                return cached->second;
+
+            // A common base-vertex offset preserves the number of distinct indices.
+            const uint32_t cutIndex = indexSize == 2 ? UINT16_MAX : UINT32_MAX;
+            std::vector<uint32_t> indices;
+            indices.reserve(indexCount);
+            const auto* data = bytes.data() + static_cast<size_t>(start - offset);
+            for (uint32_t i = 0; i < indexCount; ++i, data += indexSize) {
+                uint32_t index = 0;
+                std::memcpy(&index, data, indexSize);
+                if (cut == IndexStripCut::unknown && (index == UINT16_MAX || index == UINT32_MAX)) {
+                    if (vertexCounts.size() < 256)
+                        vertexCounts.emplace(key, std::nullopt);
+                    return std::nullopt;
+                }
+                if (cut != IndexStripCut::enabled || index != cutIndex)
+                    indices.push_back(index);
+            }
+            std::sort(indices.begin(), indices.end());
+            const auto distinct = static_cast<uint32_t>(std::unique(indices.begin(), indices.end()) - indices.begin());
+            if (vertexCounts.size() < 256)
+                vertexCounts.emplace(key, distinct);
+            return distinct;
+        }
+    };
+    struct D3D12BufferInfo {
+        uint64_t id;
+        uint64_t size;
+        uint64_t latestWrite = 0;
+        bool upload;
+        uint32_t mapCount = 0;
+        bool uploaded = false;
+        std::shared_ptr<uint64_t> uploadRevision;
+    };
+    static constexpr size_t indexBufferByteBudget = 64 * 1024 * 1024;
+    std::mutex indexBufferMutex;
+    std::unordered_map<uint64_t, std::vector<IndexBufferSnapshot>> indexBuffers;
+    size_t indexBufferBytes = 0;
+    bool indexUploadsInvalidated = false;
+    uint64_t d3d12IndexSerial = 0;
+    std::unordered_map<uint64_t, D3D12BufferInfo> d3d12Buffers;
+
     reshade::api::effect_runtime* current_runtime = nullptr;
     std::atomic_bool rendered_effects = false;
     std::shared_mutex binding_mutex;

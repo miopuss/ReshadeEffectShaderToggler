@@ -1699,7 +1699,7 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
             ImGui::BeginDisabled();
 
         bool matchIdx = drawSettings.matchIndexCount;
-        if (DrawToggleRow("Filter by index count", &matchIdx, "Only trigger for draw calls with index count in specified range.", nullptr, 4.0f)) {
+        if (DrawToggleRow("Filter by index count", &matchIdx, "Match direct indexed draws whose index count is in range.", nullptr, 4.0f)) {
             drawSettings.matchIndexCount = matchIdx;
             applyDrawSettings();
         }
@@ -1728,7 +1728,7 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
         }
 
         bool matchVtx = drawSettings.matchVertexCount;
-        if (DrawToggleRow("Filter by vertex count", &matchVtx, "Only trigger for draw calls with vertex count in specified range.", nullptr, 4.0f)) {
+        if (DrawToggleRow("Filter by vertex count", &matchVtx, "Match direct draws by vertex count. For indexed draws, requires a known distinct vertex count and the index count filter turned off.", nullptr, 4.0f)) {
             drawSettings.matchVertexCount = matchVtx;
             applyDrawSettings();
         }
@@ -1891,27 +1891,41 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
                             d.isIndexed ? Tr("idx") : Tr("vtx"),
                             d.instanceCount,
                             d.invocations);
+                        if (d.isIndexed) {
+                            ImGui::SameLine();
+                            if (d.indexedVertexCount)
+                                ImGui::Text(Tr("%u distinct vertices"), *d.indexedVertexCount);
+                            else
+                                ImGui::TextDisabled("%s", Tr("Vertex count unavailable"));
+                        }
                         ImGui::SameLine();
-                        if (ImGui::SmallButton(Tr("Set Filter"))) {
+                        const bool setFilter = ImGui::SmallButton(Tr("Set Filter"));
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(Tr("Lock group geometry filter to exactly %u %s."), d.count, d.isIndexed ? Tr("indices") : Tr("vertices"));
+                        }
+                        bool setVertexFilter = false;
+                        if (d.indexedVertexCount) {
+                            ImGui::SameLine();
+                            setVertexFilter = ImGui::SmallButton(Tr("Filter by vertex count"));
+                        }
+                        if (setFilter || setVertexFilter) {
                             drawSettings.suppressDrawCall = true;
                             drawSettings.matchInstanceCount = true;
                             drawSettings.instanceCountMin = d.instanceCount;
                             drawSettings.instanceCountMax = d.instanceCount;
-                            if (d.isIndexed) {
+                            if (d.isIndexed && !setVertexFilter) {
                                 drawSettings.matchIndexCount = true;
                                 drawSettings.indexCountMin = d.count;
                                 drawSettings.indexCountMax = d.count;
                                 drawSettings.matchVertexCount = false;
                             } else {
                                 drawSettings.matchVertexCount = true;
-                                drawSettings.vertexCountMin = d.count;
-                                drawSettings.vertexCountMax = d.count;
+                                const uint32_t vertices = d.indexedVertexCount.value_or(d.count);
+                                drawSettings.vertexCountMin = vertices;
+                                drawSettings.vertexCountMax = vertices;
                                 drawSettings.matchIndexCount = false;
                             }
                             applyDrawSettings();
-                        }
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(Tr("Lock group geometry filter to exactly %u %s."), d.count, d.isIndexed ? Tr("indices") : Tr("vertices"));
                         }
                         ImGui::PopID();
                     }

@@ -36,6 +36,7 @@
 #include "KeyMonitor.h"
 #include "PipelinePrivateData.h"
 #include "RenderingBindingManager.h"
+#include <cstring>
 #include "RenderingEffectManager.h"
 #include "RenderingManager.h"
 #include "RenderingPreviewManager.h"
@@ -51,6 +52,7 @@
 #include <chrono>
 #include <d3d11.h>
 #include <wrl/client.h>
+#include <d3d12.h>
 #include <cmath>
 #include <filesystem>
 #include <format>
@@ -211,7 +213,279 @@ static bool onCreateResource(device* device, resource_desc& desc, subresource_da
     return resourceManager.OnCreateResource(device, desc, initial_data, initial_state);
 }
 
+static void ForgetIndexBuffer(DeviceDataContainer& state, uint64_t handle) {
+    const auto it = state.indexBuffers.find(handle);
+    if (it != state.indexBuffers.end()) {
+        for (const auto& snapshot : it->second)
+            state.indexBufferBytes -= snapshot.bytes.size();
+        state.indexBuffers.erase(it);
+    }
+}
+
+static void RememberIndexBuffer(device* device, const resource_desc& desc, const subresource_data* initData, resource buffer) {
+    // GPU-writable and shared resources can change without a CPU upload event.
+    constexpr auto gpuWrites = resource_usage::unordered_access | resource_usage::stream_output | resource_usage::render_target;
+    constexpr auto externalStorage = resource_flags::shared | resource_flags::shared_nt_handle | resource_flags::sparse_binding;
+    constexpr size_t byteBudget = DeviceDataContainer::indexBufferByteBudget;
+    if (device->get_api() == device_api::d3d12 && desc.type == resource_type::buffer &&
+        (desc.usage & resource_usage::unordered_access) == resource_usage::undefined &&
+        (desc.flags & externalStorage) == resource_flags::none &&
+        (desc.heap == memory_heap::default_ || desc.heap == memory_heap::upload)) {
+        auto& state = *device->get_private_data<DeviceDataContainer>();
+        std::lock_guard lock(state.indexBufferMutex);
+        const bool upload = desc.heap == memory_heap::upload;
+        state.d3d12Buffers.try_emplace(buffer.handle, DeviceDataContainer::D3D12BufferInfo{
+            ++state.d3d12IndexSerial, desc.buffer.size, 0, upload, 0, false, upload ? std::make_shared<uint64_t>(0) : nullptr});
+        return;
+    }
+    if (device->get_api() != device_api::d3d11 || desc.type != resource_type::buffer ||
+        (desc.usage & resource_usage::index_buffer) == resource_usage::undefined ||
+        (desc.usage & gpuWrites) != resource_usage::undefined ||
+        (desc.flags & externalStorage) != resource_flags::none || initData == nullptr || initData->data == nullptr ||
+        desc.buffer.size == 0 || desc.buffer.size > byteBudget)
+        return;
+
+    auto& state = *device->get_private_data<DeviceDataContainer>();
+    std::lock_guard lock(state.indexBufferMutex);
+    const auto size = static_cast<size_t>(desc.buffer.size);
+    if (size > byteBudget - state.indexBufferBytes)
+        return;
+
+    const auto [it, inserted] = state.indexBuffers.try_emplace(buffer.handle);
+    if (inserted) {
+        const auto* bytes = static_cast<const uint8_t*>(initData->data);
+        it->second.emplace_back().bytes.assign(bytes, bytes + size);
+        state.indexBufferBytes += size;
+    }
+}
+
+static void RecordIndexBufferWrite(command_list* cmd_list, resource dest, resource source = {},
+                                   uint64_t sourceOffset = 0, uint64_t destOffset = 0, uint64_t size = 0) {
+    auto* dev = cmd_list->get_device();
+    const auto api = dev->get_api();
+    if (!dest.handle || (api != device_api::d3d11 && api != device_api::d3d12))
+        return;
+
+    auto& state = *dev->get_private_data<DeviceDataContainer>();
+    std::lock_guard lock(state.indexBufferMutex);
+    ForgetIndexBuffer(state, dest.handle);
+    if (api != device_api::d3d12)
+        return;
+
+    const auto target = state.d3d12Buffers.find(dest.handle);
+    if (target == state.d3d12Buffers.end())
+        return;
+    if (target->second.upload) {
+        target->second.uploaded = false;
+        ++*target->second.uploadRevision;
+        state.indexUploadsInvalidated = true;
+        return;
+    }
+
+    auto& writes = cmd_list->get_private_data<CommandListDataContainer>()->d3d12IndexWrites[dest.handle];
+    writes.serial = ++state.d3d12IndexSerial;
+    target->second.latestWrite = writes.serial;
+    const auto origin = state.d3d12Buffers.find(source.handle);
+    const bool fromUpload = origin != state.d3d12Buffers.end() && origin->second.upload;
+    if (size == UINT64_MAX)
+        size = target->second.size;
+    if (size == 0 || destOffset > target->second.size || size > target->second.size - destOffset) {
+        writes.copies.clear();
+        return;
+    }
+    std::optional<D3D12IndexBufferCopy> copy;
+    if (fromUpload && sourceOffset <= origin->second.size && size <= origin->second.size - sourceOffset)
+        copy = D3D12IndexBufferCopy{source, origin->second.id, sourceOffset, destOffset, size};
+    writes.recordRange(destOffset, size, copy);
+}
+
+static bool onCopyIndexBufferResource(command_list* cmd_list, resource source, resource dest) {
+    RecordIndexBufferWrite(cmd_list, dest, source, 0, 0, UINT64_MAX);
+    return false;
+}
+
+static bool onCopyIndexBufferRegion(command_list* cmd_list, resource source, uint64_t sourceOffset,
+                                    resource dest, uint64_t destOffset, uint64_t size) {
+    RecordIndexBufferWrite(cmd_list, dest, source, sourceOffset, destOffset, size);
+    return false;
+}
+
+static bool onUpdateIndexBufferCommand(command_list* cmd_list, const void*, resource dest, uint64_t, uint64_t) {
+    RecordIndexBufferWrite(cmd_list, dest);
+    return false;
+}
+
+static thread_local bool readingD3D12IndexUpload = false;
+
+// Null alias barriers do not identify the affected buffer.
+static void InvalidateAliasedIndexBuffers(DeviceDataContainer& state) {
+    state.indexBuffers.clear();
+    state.indexBufferBytes = 0;
+    for (auto& [_, buffer] : state.d3d12Buffers) {
+        buffer.latestWrite = 0;
+        if (buffer.upload) {
+            buffer.uploaded = false;
+            ++*buffer.uploadRevision;
+        }
+    }
+}
+
+static void ReclaimInvalidIndexUploads(DeviceDataContainer& state) {
+    if (!state.indexUploadsInvalidated)
+        return;
+    state.indexUploadsInvalidated = false;
+    for (auto it = state.indexBuffers.begin(); it != state.indexBuffers.end();) {
+        std::erase_if(it->second, [&state](const auto& snapshot) {
+            if (snapshot.isCurrent())
+                return false;
+            state.indexBufferBytes -= snapshot.bytes.size();
+            return true;
+        });
+        if (it->second.empty())
+            it = state.indexBuffers.erase(it);
+        else
+            ++it;
+    }
+}
+
+// Called under indexBufferMutex. Read only uploads the application has finished
+// mapping. A later application map invalidates every snapshot from that upload.
+static bool CaptureD3D12IndexUpload(DeviceDataContainer& state, resource source, uint64_t sourceOffset,
+                                    uint64_t dest, uint64_t destOffset, uint64_t size) {
+    const auto it = state.d3d12Buffers.find(source.handle);
+    if (it == state.d3d12Buffers.end() || !it->second.uploaded || it->second.mapCount != 0 ||
+        size == 0 || sourceOffset > it->second.size ||
+        size > it->second.size - sourceOffset || size > DeviceDataContainer::indexBufferByteBudget ||
+        sourceOffset > SIZE_MAX - size)
+        return false;
+    if (size > DeviceDataContainer::indexBufferByteBudget - state.indexBufferBytes) {
+        ReclaimInvalidIndexUploads(state);
+        if (size > DeviceDataContainer::indexBufferByteBudget - state.indexBufferBytes)
+            return false;
+    }
+
+    DeviceDataContainer::IndexBufferSnapshot snapshot;
+    snapshot.offset = destOffset;
+    snapshot.bytes.resize(static_cast<size_t>(size));
+    snapshot.uploadRevision = it->second.uploadRevision;
+    snapshot.capturedRevision = *snapshot.uploadRevision;
+
+    auto* native = reinterpret_cast<ID3D12Resource*>(source.handle);
+    const D3D12_RANGE readRange{static_cast<SIZE_T>(sourceOffset), static_cast<SIZE_T>(sourceOffset + size)};
+    const D3D12_RANGE noWrites{0, 0};
+    void* mapped = nullptr;
+    readingD3D12IndexUpload = true;
+    const HRESULT result = native->Map(0, &readRange, &mapped);
+    if (SUCCEEDED(result)) {
+        std::memcpy(snapshot.bytes.data(), static_cast<const uint8_t*>(mapped) + readRange.Begin, snapshot.bytes.size());
+        native->Unmap(0, &noWrites);
+    }
+    readingD3D12IndexUpload = false;
+    if (FAILED(result))
+        return false;
+
+    state.indexBufferBytes += snapshot.bytes.size();
+    state.indexBuffers[dest].push_back(std::move(snapshot));
+    return true;
+}
+
+static void onExecuteIndexBufferCopies(command_queue* queue, command_list* cmd_list) {
+    auto* dev = queue->get_device();
+    if (dev->get_api() != device_api::d3d12)
+        return;
+
+    const auto& data = *cmd_list->get_private_data<CommandListDataContainer>();
+    if (data.d3d12IndexWrites.empty() && !data.d3d12UnknownIndexAlias)
+        return;
+    auto& state = *dev->get_private_data<DeviceDataContainer>();
+    std::lock_guard lock(state.indexBufferMutex);
+    if (data.d3d12UnknownIndexAlias) {
+        InvalidateAliasedIndexBuffers(state);
+        return;
+    }
+    for (const auto& [dest, ranges] : data.d3d12IndexWrites) {
+        ForgetIndexBuffer(state, dest);
+        const auto target = state.d3d12Buffers.find(dest);
+        if (target == state.d3d12Buffers.end() || target->second.latestWrite != ranges.serial)
+            continue;
+        for (const auto& copy : ranges.copies) {
+            const auto origin = state.d3d12Buffers.find(copy.source.handle);
+            if (origin != state.d3d12Buffers.end() && origin->second.id == copy.sourceId)
+                CaptureD3D12IndexUpload(state, copy.source, copy.sourceOffset, dest, copy.destOffset, copy.size);
+        }
+    }
+}
+
+static void onD3D12IndexBinding(command_list* cmd_list, resource buffer, uint64_t offset, uint32_t indexSize) {
+    if (cmd_list->get_device()->get_api() == device_api::d3d12)
+        cmd_list->get_private_data<CommandListDataContainer>()->d3d12IndexBuffer = {buffer, offset, indexSize};
+}
+
+static void onD3D12IndexTopology(command_list* cmd_list, uint32_t count, const dynamic_state* states, const uint32_t* values) {
+    if (cmd_list->get_device()->get_api() != device_api::d3d12)
+        return;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (states[i] != dynamic_state::primitive_topology)
+            continue;
+        auto& cut = cmd_list->get_private_data<CommandListDataContainer>()->d3d12IndexStripCut;
+        switch (static_cast<primitive_topology>(values[i])) {
+            case primitive_topology::undefined:
+            case primitive_topology::line_strip:
+            case primitive_topology::triangle_strip:
+            case primitive_topology::line_strip_adj:
+            case primitive_topology::triangle_strip_adj:
+                // ReShade does not expose the D3D12 PSO's strip-cut value.
+                cut = IndexStripCut::unknown;
+                break;
+            default:
+                cut = IndexStripCut::disabled;
+                break;
+        }
+    }
+}
+
+static void onExecuteIndexBufferBundle(command_list* cmd_list, command_list*) {
+    if (cmd_list->get_device()->get_api() == device_api::d3d12) {
+        auto& data = *cmd_list->get_private_data<CommandListDataContainer>();
+        data.d3d12IndexBuffer = {};
+        data.d3d12IndexStripCut = IndexStripCut::unknown;
+    }
+}
+
+static void onIndexBufferBarrier(command_list* cmd_list, uint32_t count, const resource* buffers,
+                                 const resource_usage* oldStates, const resource_usage* newStates) {
+    if (cmd_list->get_device()->get_api() != device_api::d3d12)
+        return;
+    for (uint32_t i = 0; i < count; ++i) {
+        // ReShade represents aliasing as an undefined-to-general barrier.
+        const bool alias = oldStates[i] == resource_usage::undefined && newStates[i] == resource_usage::general;
+        if (alias && !buffers[i].handle) {
+            cmd_list->get_private_data<CommandListDataContainer>()->d3d12UnknownIndexAlias = true;
+            auto& state = *cmd_list->get_device()->get_private_data<DeviceDataContainer>();
+            std::lock_guard lock(state.indexBufferMutex);
+            InvalidateAliasedIndexBuffers(state);
+        } else if (alias || (newStates[i] & resource_usage::stream_output) != resource_usage::undefined) {
+            RecordIndexBufferWrite(cmd_list, buffers[i]);
+        }
+    }
+}
+
+static bool onIndexCopyTextureToBuffer(command_list* cmd_list, resource, uint32_t, const subresource_box*,
+                                       resource dest, uint64_t, uint32_t, uint32_t) {
+    if (cmd_list->get_device()->get_api() == device_api::d3d12)
+        RecordIndexBufferWrite(cmd_list, dest);
+    return false;
+}
+
+static bool onIndexCopyQueryResults(command_list* cmd_list, query_heap, query_type, uint32_t, uint32_t,
+                                    resource dest, uint64_t, uint32_t) {
+    if (cmd_list->get_device()->get_api() == device_api::d3d12)
+        RecordIndexBufferWrite(cmd_list, dest);
+    return false;
+}
+
 static void onInitResource(device* device, const resource_desc& desc, const subresource_data* initData, resource_usage usage, reshade::api::resource handle) {
+    RememberIndexBuffer(device, desc, initData, handle);
     resourceManager.OnInitResource(device, desc, initData, usage, handle);
 
     if (constantCopy != nullptr)
@@ -219,6 +493,12 @@ static void onInitResource(device* device, const resource_desc& desc, const subr
 }
 
 static void onDestroyResource(device* device, resource res) {
+    if (device->get_api() == device_api::d3d11 || device->get_api() == device_api::d3d12) {
+        auto& state = *device->get_private_data<DeviceDataContainer>();
+        std::lock_guard lock(state.indexBufferMutex);
+        ForgetIndexBuffer(state, res.handle);
+        state.d3d12Buffers.erase(res.handle);
+    }
     resourceManager.OnDestroyResource(device, res);
 
     if (constantCopy != nullptr)
@@ -689,16 +969,55 @@ static void onReShadePresent(effect_runtime* runtime) {
 }
 
 static void onMapBufferRegion(device* device, resource resource, uint64_t offset, uint64_t size, map_access access, void** data) {
+    if (readingD3D12IndexUpload)
+        return;
+    if ((device->get_api() == device_api::d3d11 || device->get_api() == device_api::d3d12) &&
+        access != map_access::read_only) {
+        auto& state = *device->get_private_data<DeviceDataContainer>();
+        std::lock_guard lock(state.indexBufferMutex);
+        ForgetIndexBuffer(state, resource.handle);
+        const auto it = state.d3d12Buffers.find(resource.handle);
+        if (it != state.d3d12Buffers.end() && it->second.upload) {
+            ++it->second.mapCount;
+            ++*it->second.uploadRevision;
+            state.indexUploadsInvalidated = true;
+        }
+    }
     if (constantCopy != nullptr)
         constantCopy->OnMapBufferRegion(device, resource, offset, size, access, data);
 }
 
 static void onUnmapBufferRegion(device* device, resource resource) {
+    if (readingD3D12IndexUpload)
+        return;
+    if (device->get_api() == device_api::d3d12) {
+        auto& state = *device->get_private_data<DeviceDataContainer>();
+        std::lock_guard lock(state.indexBufferMutex);
+        const auto it = state.d3d12Buffers.find(resource.handle);
+        if (it != state.d3d12Buffers.end() && it->second.mapCount != 0) {
+            if (--it->second.mapCount == 0)
+                it->second.uploaded = true;
+        }
+    }
     if (constantCopy != nullptr)
         constantCopy->OnUnmapBufferRegion(device, resource);
 }
 
 static bool onUpdateBufferRegion(device* device, const void* data, resource resource, uint64_t offset, uint64_t size) {
+    if (device->get_api() == device_api::d3d11 || device->get_api() == device_api::d3d12) {
+        auto& state = *device->get_private_data<DeviceDataContainer>();
+        std::lock_guard lock(state.indexBufferMutex);
+        ForgetIndexBuffer(state, resource.handle);
+        const auto it = state.d3d12Buffers.find(resource.handle);
+        if (it != state.d3d12Buffers.end()) {
+            it->second.latestWrite = 0;
+            if (it->second.upload) {
+                it->second.uploaded = false;
+                ++*it->second.uploadRevision;
+                state.indexUploadsInvalidated = true;
+            }
+        }
+    }
     if (constantCopy != nullptr)
         constantCopy->OnUpdateBufferRegion(device, data, resource, offset, size);
 
@@ -792,6 +1111,7 @@ struct DrawGeometry {
     bool indexed;
     uint32_t count;
     uint32_t instances;
+    std::optional<uint32_t> indexedVertexCount;
 };
 
 static void EvaluateShaderHiding(const ShaderData& stage, uint32_t stageIndex, const DrawGeometry* geometry, DrawSuppression& result) {
@@ -810,7 +1130,8 @@ static void EvaluateShaderHiding(const ShaderData& stage, uint32_t stageIndex, c
             continue;
         }
         if (settings->hasGeometryFilter() &&
-            (geometry == nullptr || !settings->matchesDrawGeometry(geometry->indexed, geometry->count, geometry->instances)))
+            (geometry == nullptr || !settings->matchesDrawGeometry(geometry->indexed, geometry->count, geometry->instances,
+                                                                  geometry->indexedVertexCount)))
             continue;
         if (stageIndex < 2 && settings->spatialFilterEnabled) {
             if (geometry != nullptr)
@@ -1084,8 +1405,10 @@ static bool HandleGraphicsDraw(command_list* cmd_list, const DrawGeometry* geome
     constexpr uint64_t stages = Rendering::MATCH_PS | Rendering::MATCH_VS;
     auto& cmdData = *cmd_list->get_private_data<CommandListDataContainer>();
     if (geometry != nullptr) {
-        g_pixelShaderManager.recordDrawGeometry(cmdData.ps.activeShaderHash, geometry->indexed, geometry->count, geometry->instances);
-        g_vertexShaderManager.recordDrawGeometry(cmdData.vs.activeShaderHash, geometry->indexed, geometry->count, geometry->instances);
+        g_pixelShaderManager.recordDrawGeometry(cmdData.ps.activeShaderHash, geometry->indexed, geometry->count,
+                                               geometry->instances, geometry->indexedVertexCount);
+        g_vertexShaderManager.recordDrawGeometry(cmdData.vs.activeShaderHash, geometry->indexed, geometry->count,
+                                                geometry->instances, geometry->indexedVertexCount);
     }
     if (ShouldSuppressVulkanHuntedCall(cmd_list, stages))
         return true;
@@ -1119,7 +1442,7 @@ static bool HandleComputeDispatch(command_list* cmd_list) {
 }
 
 static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) {
-    const DrawGeometry geometry{false, vertex_count, instance_count};
+    const DrawGeometry geometry{false, vertex_count, instance_count, std::nullopt};
     return HandleGraphicsDraw(cmd_list, &geometry, first_vertex, 0, first_instance);
 }
 
@@ -1127,13 +1450,94 @@ static bool onDispatch(command_list* cmd_list, uint32_t, uint32_t, uint32_t) {
     return HandleComputeDispatch(cmd_list);
 }
 
+static bool NeedsIndexedVertexCount(const ShaderData& stage, uint32_t stageIndex, const ShaderToggler::ShaderManager& manager) {
+    if (stage.activeShaderHash == 0)
+        return false;
+    if (manager.isInHuntingMode() && manager.getActiveHuntedShaderHash() == stage.activeShaderHash)
+        return true;
+
+    for (const auto* group : stage.blockedShaderGroups) {
+        if (group == nullptr || !group->isActive())
+            continue;
+        const auto settings = group->FindShaderDrawSettings(stageIndex, stage.activeShaderHash);
+        if (settings && settings->suppressDrawCall && settings->matchVertexCount && !settings->matchIndexCount)
+            return true;
+    }
+    return false;
+}
+
+static std::optional<uint32_t> GetIndexedVertexCount(command_list* cmd_list, uint32_t firstIndex, uint32_t indexCount) {
+    auto* dev = cmd_list->get_device();
+    const auto api = dev->get_api();
+    if (api != device_api::d3d11 && api != device_api::d3d12)
+        return std::nullopt;
+    const auto& drawState = *cmd_list->get_private_data<CommandListDataContainer>();
+    if (!NeedsIndexedVertexCount(drawState.ps, 0, g_pixelShaderManager) &&
+        !NeedsIndexedVertexCount(drawState.vs, 1, g_vertexShaderManager))
+        return std::nullopt;
+
+    auto& state = *dev->get_private_data<DeviceDataContainer>();
+    if (api == device_api::d3d12) {
+        const auto& binding = drawState.d3d12IndexBuffer;
+        if (!binding.buffer.handle || (binding.indexSize != 2 && binding.indexSize != 4))
+            return std::nullopt;
+        const uint64_t start = binding.offset + uint64_t{firstIndex} * binding.indexSize;
+        const uint64_t length = uint64_t{indexCount} * binding.indexSize;
+        std::lock_guard lock(state.indexBufferMutex);
+        const auto it = state.indexBuffers.find(binding.buffer.handle);
+        if (it != state.indexBuffers.end()) {
+            for (auto& snapshot : it->second) {
+                if (snapshot.isCurrent() && snapshot.contains(start, length))
+                    return snapshot.countDistinct(start, indexCount, binding.indexSize, drawState.d3d12IndexStripCut);
+            }
+        }
+        const auto buffer = state.d3d12Buffers.find(binding.buffer.handle);
+        if (buffer == state.d3d12Buffers.end() || !buffer->second.upload)
+            return std::nullopt;
+        ForgetIndexBuffer(state, binding.buffer.handle);
+        if (!CaptureD3D12IndexUpload(state, binding.buffer, start, binding.buffer.handle, start, length))
+            return std::nullopt;
+        return state.indexBuffers.at(binding.buffer.handle).front().countDistinct(start, indexCount, binding.indexSize,
+                                                                                drawState.d3d12IndexStripCut);
+    }
+
+    // Query the actual context state so bindings restored by command lists or
+    // state blocks are handled even when there was no bind event.
+    auto* context = reinterpret_cast<ID3D11DeviceContext*>(cmd_list->get_native());
+    Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    UINT offset = 0;
+    context->IAGetIndexBuffer(buffer.GetAddressOf(), &format, &offset);
+    if (!buffer)
+        return std::nullopt;
+    if (format != DXGI_FORMAT_R16_UINT && format != DXGI_FORMAT_R32_UINT)
+        return std::nullopt;
+
+    D3D11_PRIMITIVE_TOPOLOGY topology;
+    context->IAGetPrimitiveTopology(&topology);
+    const bool restart = topology == D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP ||
+                         topology == D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP ||
+                         topology == D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ ||
+                         topology == D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ;
+    const uint32_t indexSize = format == DXGI_FORMAT_R16_UINT ? 2 : 4;
+    const uint64_t start = uint64_t{offset} + uint64_t{firstIndex} * indexSize;
+    std::lock_guard lock(state.indexBufferMutex);
+    const auto it = state.indexBuffers.find(reinterpret_cast<uintptr_t>(static_cast<ID3D11Resource*>(buffer.Get())));
+    if (it == state.indexBuffers.end())
+        return std::nullopt;
+    return it->second.front().countDistinct(start, indexCount, indexSize, restart ? IndexStripCut::enabled : IndexStripCut::disabled);
+}
+
 static bool onDrawIndexed(command_list* cmd_list, uint32_t index_count, uint32_t instance_count,
                           uint32_t first_index, int32_t vertex_offset, uint32_t first_instance) {
-    const DrawGeometry geometry{true, index_count, instance_count};
+    const DrawGeometry geometry{true, index_count, instance_count, GetIndexedVertexCount(cmd_list, first_index, index_count)};
     return HandleGraphicsDraw(cmd_list, &geometry, first_index, vertex_offset, first_instance);
 }
 
 static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command type, resource, uint64_t, uint32_t, uint32_t) {
+    // ExecuteIndirect can modify or clear an index binding without a bind event.
+    if (cmd_list->get_device()->get_api() == device_api::d3d12)
+        cmd_list->get_private_data<CommandListDataContainer>()->d3d12IndexBuffer = {};
     switch (type) {
         case indirect_command::draw:
         case indirect_command::draw_indexed:
@@ -1177,6 +1581,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID) {
             reshade::register_event<reshade::addon_event::create_resource>(onCreateResource);
             reshade::register_event<reshade::addon_event::map_buffer_region>(onMapBufferRegion);
             reshade::register_event<reshade::addon_event::update_buffer_region>(onUpdateBufferRegion);
+            reshade::register_event<reshade::addon_event::update_buffer_region_command>(onUpdateIndexBufferCommand);
+            reshade::register_event<reshade::addon_event::copy_resource>(onCopyIndexBufferResource);
+            reshade::register_event<reshade::addon_event::copy_buffer_region>(onCopyIndexBufferRegion);
+            reshade::register_event<reshade::addon_event::bind_index_buffer>(onD3D12IndexBinding);
+            reshade::register_event<reshade::addon_event::bind_pipeline_states>(onD3D12IndexTopology);
+            reshade::register_event<reshade::addon_event::execute_command_list>(onExecuteIndexBufferCopies);
+            reshade::register_event<reshade::addon_event::execute_secondary_command_list>(onExecuteIndexBufferBundle);
+            reshade::register_event<reshade::addon_event::barrier>(onIndexBufferBarrier);
+            reshade::register_event<reshade::addon_event::copy_texture_to_buffer>(onIndexCopyTextureToBuffer);
+            reshade::register_event<reshade::addon_event::copy_query_heap_results>(onIndexCopyQueryResults);
             reshade::register_event<reshade::addon_event::unmap_buffer_region>(onUnmapBufferRegion);
             reshade::register_event<reshade::addon_event::destroy_resource>(onDestroyResource);
             reshade::register_event<reshade::addon_event::create_resource_view>(onCreateResourceView);
@@ -1221,6 +1635,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID) {
             reshade::unregister_event<reshade::addon_event::reshade_present>(onReShadePresent);
             reshade::unregister_event<reshade::addon_event::map_buffer_region>(onMapBufferRegion);
             reshade::unregister_event<reshade::addon_event::update_buffer_region>(onUpdateBufferRegion);
+            reshade::unregister_event<reshade::addon_event::update_buffer_region_command>(onUpdateIndexBufferCommand);
+            reshade::unregister_event<reshade::addon_event::copy_resource>(onCopyIndexBufferResource);
+            reshade::unregister_event<reshade::addon_event::copy_buffer_region>(onCopyIndexBufferRegion);
+            reshade::unregister_event<reshade::addon_event::bind_index_buffer>(onD3D12IndexBinding);
+            reshade::unregister_event<reshade::addon_event::bind_pipeline_states>(onD3D12IndexTopology);
+            reshade::unregister_event<reshade::addon_event::execute_command_list>(onExecuteIndexBufferCopies);
+            reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(onExecuteIndexBufferBundle);
+            reshade::unregister_event<reshade::addon_event::barrier>(onIndexBufferBarrier);
+            reshade::unregister_event<reshade::addon_event::copy_texture_to_buffer>(onIndexCopyTextureToBuffer);
+            reshade::unregister_event<reshade::addon_event::copy_query_heap_results>(onIndexCopyQueryResults);
             reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(onUnmapBufferRegion);
             reshade::unregister_event<reshade::addon_event::destroy_pipeline>(onDestroyPipeline);
             reshade::unregister_event<reshade::addon_event::init_pipeline>(onInitPipeline);
