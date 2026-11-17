@@ -53,8 +53,13 @@ struct DrawGeometryStats {
     uint32_t instanceCount = 0;
     uint32_t invocations = 0;
     std::optional<uint32_t> indexedVertexCount;
+    uint64_t vertexBufferId = 0;
+    uint64_t vertexBufferHandle = 0;
+    uint32_t vertexBufferSlot = 0;
 
     bool operator==(const DrawGeometryStats& other) const {
+        if (vertexBufferId != 0 || other.vertexBufferId != 0)
+            return vertexBufferId != 0 && vertexBufferId == other.vertexBufferId;
         return isIndexed == other.isIndexed && count == other.count && instanceCount == other.instanceCount &&
                indexedVertexCount == other.indexedVertexCount;
     }
@@ -110,7 +115,8 @@ class ShaderManager {
         return _markedShaderHashes.erase(hash) > 0;
     }
     void recordDrawGeometry(uint32_t shaderHash, bool isIndexed, uint32_t count, uint32_t instanceCount,
-                            std::optional<uint32_t> indexedVertexCount = std::nullopt);
+                            std::optional<uint32_t> indexedVertexCount = std::nullopt,
+                            uint64_t vertexBufferId = 0, uint64_t vertexBufferHandle = 0, uint32_t vertexBufferSlot = 0);
     std::vector<DrawGeometryStats> getObservedDrawGeometries() const;
     void clearObservedDrawGeometries();
     void resetActiveHuntedShader();

@@ -43,6 +43,7 @@
 #include <unordered_set>
 #include <imgui.h>
 #include "CDataFile.h"
+#include <span>
 #include "EffectData.h"
 #include "GlobalResourceView.h"
 #include "reshade.hpp"
@@ -163,6 +164,8 @@ struct __declspec(novtable) ShaderDrawSettings final {
     bool matchVertexCount = false;
     uint32_t vertexCountMin = 0;
     uint32_t vertexCountMax = 0;
+    bool matchVertexBuffer = false;
+    std::vector<uint64_t> vertexBufferFilters;
     bool matchInstanceCount = false;
     uint32_t instanceCountMin = 0;
     uint32_t instanceCountMax = 0;
@@ -171,10 +174,19 @@ struct __declspec(novtable) ShaderDrawSettings final {
     bool spatialFilterEnabled = false;
     std::vector<ScreenRegion> spatialRegions;
 
-    bool hasGeometryFilter() const { return matchIndexCount || matchVertexCount || matchInstanceCount; }
+    bool hasGeometryFilter() const { return matchIndexCount || matchVertexCount || matchInstanceCount || matchVertexBuffer; }
     bool hasSpatialFilter() const { return spatialFilterEnabled && !spatialRegions.empty(); }
     bool isDefault() const {
-        return !suppressDrawCall && !hasGeometryFilter() && indexCountRanges.empty() && !spatialFilterEnabled && spatialRegions.empty();
+        return !suppressDrawCall && !hasGeometryFilter() && indexCountRanges.empty() && vertexBufferFilters.empty() && !spatialFilterEnabled && spatialRegions.empty();
+    }
+
+    void addObservedVertexBuffer(uint64_t identifier) {
+        if (identifier == 0)
+            return;
+        suppressDrawCall = true;
+        matchVertexBuffer = true;
+        if (std::find(vertexBufferFilters.begin(), vertexBufferFilters.end(), identifier) == vertexBufferFilters.end())
+            vertexBufferFilters.push_back(identifier);
     }
 
     void addObservedIndexCount(uint32_t count) {
@@ -195,7 +207,12 @@ struct __declspec(novtable) ShaderDrawSettings final {
     }
 
     bool matchesDrawGeometry(bool isIndexed, uint32_t count, uint32_t instanceCount = 1,
-                             std::optional<uint32_t> indexedVertexCount = std::nullopt) const {
+                             std::optional<uint32_t> indexedVertexCount = std::nullopt,
+                             std::span<const uint64_t> vertexBuffers = {}) const {
+        if (matchVertexBuffer && !std::any_of(vertexBufferFilters.begin(), vertexBufferFilters.end(), [&](uint64_t identifier) {
+                return identifier != 0 && std::find(vertexBuffers.begin(), vertexBuffers.end(), identifier) != vertexBuffers.end();
+            }))
+            return false;
         if (!hasGeometryFilter())
             return true;
 

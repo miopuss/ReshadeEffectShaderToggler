@@ -277,22 +277,24 @@ uint32_t ShaderManager::getShaderHash(uint64_t handle) {
 
 
 void ShaderManager::recordDrawGeometry(uint32_t shaderHash, bool isIndexed, uint32_t count, uint32_t instanceCount,
-                                       std::optional<uint32_t> indexedVertexCount) {
+                                       std::optional<uint32_t> indexedVertexCount,
+                                       uint64_t vertexBufferId, uint64_t vertexBufferHandle, uint32_t vertexBufferSlot) {
     if (!_isInHuntingMode.load(memory_order_acquire) || shaderHash == 0 || shaderHash != _activeHuntedShaderHash.load(memory_order_acquire)) {
         return;
     }
 
     std::unique_lock lock(_drawGeometryMutex);
     auto& statsList = _observedDrawGeometries[shaderHash];
-    const DrawGeometryStats draw{ isIndexed, count, instanceCount, 1, indexedVertexCount };
+    const DrawGeometryStats draw{ isIndexed, count, instanceCount, 1, indexedVertexCount,
+                                 vertexBufferId, vertexBufferHandle, vertexBufferSlot };
     for (auto& stat : statsList) {
         if (stat == draw) {
-            stat.invocations++;
+            stat = draw; // Keep the latest geometry while grouping by resource identity.
             return;
         }
     }
 
-    if (statsList.size() < 32) {
+    if (statsList.size() < 4096) {
         statsList.push_back(draw);
     }
 }

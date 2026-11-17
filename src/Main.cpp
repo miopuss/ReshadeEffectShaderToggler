@@ -421,6 +421,16 @@ static void onD3D12IndexBinding(command_list* cmd_list, resource buffer, uint64_
         cmd_list->get_private_data<CommandListDataContainer>()->d3d12IndexBuffer = {buffer, offset, indexSize};
 }
 
+static void onD3D12VertexBinding(command_list* cmd_list, uint32_t first, uint32_t count,
+                                 const resource* buffers, const uint64_t* offsets, const uint32_t* strides) {
+    if (cmd_list->get_device()->get_api() != device_api::d3d12)
+        return;
+    auto& bindings = cmd_list->get_private_data<CommandListDataContainer>()->d3d12VertexBuffers;
+    for (uint32_t i = 0; i < count && first < bindings.size() && i < bindings.size() - first; ++i)
+        bindings[first + i] = buffers ? VertexBufferBinding{buffers[i], offsets ? offsets[i] : 0, strides ? strides[i] : 0}
+                                    : VertexBufferBinding{};
+}
+
 static void onD3D12IndexTopology(command_list* cmd_list, uint32_t count, const dynamic_state* states, const uint32_t* values) {
     if (cmd_list->get_device()->get_api() != device_api::d3d12)
         return;
@@ -448,6 +458,7 @@ static void onExecuteIndexBufferBundle(command_list* cmd_list, command_list*) {
     if (cmd_list->get_device()->get_api() == device_api::d3d12) {
         auto& data = *cmd_list->get_private_data<CommandListDataContainer>();
         data.d3d12IndexBuffer = {};
+        data.d3d12VertexBuffers = {};
         data.d3d12IndexStripCut = IndexStripCut::unknown;
     }
 }
@@ -485,6 +496,12 @@ static bool onIndexCopyQueryResults(command_list* cmd_list, query_heap, query_ty
 }
 
 static void onInitResource(device* device, const resource_desc& desc, const subresource_data* initData, resource_usage usage, reshade::api::resource handle) {
+    if ((device->get_api() == device_api::d3d11 || device->get_api() == device_api::d3d12) && desc.type == resource_type::buffer) {
+        static std::atomic_uint64_t nextGeometryResourceId{0};
+        auto& state = *device->get_private_data<DeviceDataContainer>();
+        std::lock_guard lock(state.indexBufferMutex);
+        state.geometryResourceIds[handle.handle] = ++nextGeometryResourceId;
+    }
     RememberIndexBuffer(device, desc, initData, handle);
     resourceManager.OnInitResource(device, desc, initData, usage, handle);
 
@@ -498,6 +515,7 @@ static void onDestroyResource(device* device, resource res) {
         std::lock_guard lock(state.indexBufferMutex);
         ForgetIndexBuffer(state, res.handle);
         state.d3d12Buffers.erase(res.handle);
+        state.geometryResourceIds.erase(res.handle);
     }
     resourceManager.OnDestroyResource(device, res);
 
@@ -928,6 +946,15 @@ static bool onEndRenderPass(command_list* cmd_list) {
 static void onReShadeOverlay(effect_runtime* runtime) {
     std::lock_guard previewLock(runtime->get_device()->get_private_data<DeviceDataContainer>()->previewMutex);
     DisplayOverlay(g_addonUIData, resourceManager, runtime);
+    if (g_addonUIData.GetToggleGroupIdSettingsOpen().load() >= 0 || regionSelection) {
+        // ReShade normally draws the cursor and captures game input only for its own overlay.
+        // Standalone REST windows need to request both on every visible frame.
+        auto& io = ImGui::GetIO();
+        io.MouseDrawCursor = true;
+        io.WantCaptureMouse = true;
+        io.WantCaptureKeyboard = true;
+        runtime->block_input_next_frame();
+    }
 }
 
 static void onPresent(command_queue* queue,
@@ -1149,7 +1176,55 @@ struct DrawGeometry {
     uint32_t count;
     uint32_t instances;
     std::optional<uint32_t> indexedVertexCount;
+    std::array<uint64_t, 32> vertexBufferIds{};
+    std::array<uint64_t, 32> vertexBufferHandles{};
 };
+
+static bool NeedsVertexBuffer(const ShaderData& stage, const ShaderToggler::ShaderManager& manager) {
+    if (manager.isInHuntingMode() && manager.getActiveHuntedShaderHash() == stage.activeShaderHash)
+        return true;
+    for (const auto* group : stage.blockedShaderGroups) {
+        if (group && group->isActive()) {
+            const auto settings = group->FindShaderDrawSettings(stage.id, stage.activeShaderHash);
+            if (settings && settings->suppressDrawCall && settings->matchVertexBuffer)
+                return true;
+        }
+    }
+    return false;
+}
+
+static void CaptureVertexBuffers(command_list* cmd, DrawGeometry& draw) {
+    auto* device = cmd->get_device();
+    const auto api = device->get_api();
+    if (api != device_api::d3d11 && api != device_api::d3d12)
+        return;
+    const auto& commands = *cmd->get_private_data<CommandListDataContainer>();
+    if (!NeedsVertexBuffer(commands.ps, g_pixelShaderManager) && !NeedsVertexBuffer(commands.vs, g_vertexShaderManager))
+        return;
+
+    auto bindings = commands.d3d12VertexBuffers;
+    std::array<Microsoft::WRL::ComPtr<ID3D11Buffer>, 32> references;
+    if (api == device_api::d3d11) {
+        auto* context = reinterpret_cast<ID3D11DeviceContext*>(cmd->get_native());
+        ID3D11Buffer* buffers[32]{};
+        UINT strides[32]{}, offsets[32]{};
+        context->IAGetVertexBuffers(0, 32, buffers, strides, offsets);
+        for (size_t slot = 0; slot < bindings.size(); ++slot) {
+            references[slot].Attach(buffers[slot]);
+            bindings[slot] = {{reinterpret_cast<uintptr_t>(static_cast<ID3D11Resource*>(buffers[slot]))},
+                              offsets[slot], strides[slot]};
+        }
+    }
+    auto& resources = *device->get_private_data<DeviceDataContainer>();
+    std::lock_guard lock(resources.indexBufferMutex);
+    for (size_t slot = 0; slot < bindings.size(); ++slot) {
+        const auto identity = resources.geometryResourceIds.find(bindings[slot].buffer.handle);
+        if (bindings[slot].buffer.handle && identity != resources.geometryResourceIds.end()) {
+            draw.vertexBufferIds[slot] = identity->second;
+            draw.vertexBufferHandles[slot] = bindings[slot].buffer.handle;
+        }
+    }
+}
 
 static void EvaluateShaderHiding(const ShaderData& stage, uint32_t stageIndex, const DrawGeometry* geometry, DrawSuppression& result) {
     if (stage.activeShaderHash == 0 || result.hideAll)
@@ -1168,7 +1243,7 @@ static void EvaluateShaderHiding(const ShaderData& stage, uint32_t stageIndex, c
         }
         if (settings->hasGeometryFilter() &&
             (geometry == nullptr || !settings->matchesDrawGeometry(geometry->indexed, geometry->count, geometry->instances,
-                                                                  geometry->indexedVertexCount)))
+                                                                  geometry->indexedVertexCount, geometry->vertexBufferHandles)))
             continue;
         if (stageIndex < 2 && settings->spatialFilterEnabled) {
             if (geometry != nullptr)
@@ -1442,10 +1517,16 @@ static bool HandleGraphicsDraw(command_list* cmd_list, const DrawGeometry* geome
     constexpr uint64_t stages = Rendering::MATCH_PS | Rendering::MATCH_VS;
     auto& cmdData = *cmd_list->get_private_data<CommandListDataContainer>();
     if (geometry != nullptr) {
-        g_pixelShaderManager.recordDrawGeometry(cmdData.ps.activeShaderHash, geometry->indexed, geometry->count,
-                                               geometry->instances, geometry->indexedVertexCount);
-        g_vertexShaderManager.recordDrawGeometry(cmdData.vs.activeShaderHash, geometry->indexed, geometry->count,
-                                                geometry->instances, geometry->indexedVertexCount);
+        for (uint32_t slot = 0; slot < geometry->vertexBufferIds.size(); ++slot) {
+            if (geometry->vertexBufferIds[slot] == 0)
+                continue;
+            g_pixelShaderManager.recordDrawGeometry(cmdData.ps.activeShaderHash, geometry->indexed, geometry->count,
+                geometry->instances, geometry->indexedVertexCount, geometry->vertexBufferIds[slot],
+                geometry->vertexBufferHandles[slot], slot);
+            g_vertexShaderManager.recordDrawGeometry(cmdData.vs.activeShaderHash, geometry->indexed, geometry->count,
+                geometry->instances, geometry->indexedVertexCount, geometry->vertexBufferIds[slot],
+                geometry->vertexBufferHandles[slot], slot);
+        }
     }
     if (ShouldSuppressVulkanHuntedCall(cmd_list, stages))
         return true;
@@ -1478,8 +1559,10 @@ static bool HandleComputeDispatch(command_list* cmd_list) {
     return false;
 }
 
+
 static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) {
-    const DrawGeometry geometry{false, vertex_count, instance_count, std::nullopt};
+    DrawGeometry geometry{false, vertex_count, instance_count, std::nullopt};
+    CaptureVertexBuffers(cmd_list, geometry);
     return HandleGraphicsDraw(cmd_list, &geometry, first_vertex, 0, first_instance);
 }
 
@@ -1567,14 +1650,18 @@ static std::optional<uint32_t> GetIndexedVertexCount(command_list* cmd_list, uin
 
 static bool onDrawIndexed(command_list* cmd_list, uint32_t index_count, uint32_t instance_count,
                           uint32_t first_index, int32_t vertex_offset, uint32_t first_instance) {
-    const DrawGeometry geometry{true, index_count, instance_count, GetIndexedVertexCount(cmd_list, first_index, index_count)};
+    DrawGeometry geometry{true, index_count, instance_count, GetIndexedVertexCount(cmd_list, first_index, index_count)};
+    CaptureVertexBuffers(cmd_list, geometry);
     return HandleGraphicsDraw(cmd_list, &geometry, first_index, vertex_offset, first_instance);
 }
 
 static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command type, resource, uint64_t, uint32_t, uint32_t) {
     // ExecuteIndirect can modify or clear an index binding without a bind event.
-    if (cmd_list->get_device()->get_api() == device_api::d3d12)
-        cmd_list->get_private_data<CommandListDataContainer>()->d3d12IndexBuffer = {};
+    if (cmd_list->get_device()->get_api() == device_api::d3d12) {
+        auto& data = *cmd_list->get_private_data<CommandListDataContainer>();
+        data.d3d12IndexBuffer = {};
+        data.d3d12VertexBuffers = {};
+    }
     switch (type) {
         case indirect_command::draw:
         case indirect_command::draw_indexed:
@@ -1622,6 +1709,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID) {
             reshade::register_event<reshade::addon_event::copy_resource>(onCopyIndexBufferResource);
             reshade::register_event<reshade::addon_event::copy_buffer_region>(onCopyIndexBufferRegion);
             reshade::register_event<reshade::addon_event::bind_index_buffer>(onD3D12IndexBinding);
+            reshade::register_event<reshade::addon_event::bind_vertex_buffers>(onD3D12VertexBinding);
             reshade::register_event<reshade::addon_event::bind_pipeline_states>(onD3D12IndexTopology);
             reshade::register_event<reshade::addon_event::execute_command_list>(onExecuteIndexBufferCopies);
             reshade::register_event<reshade::addon_event::execute_secondary_command_list>(onExecuteIndexBufferBundle);
@@ -1676,6 +1764,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID) {
             reshade::unregister_event<reshade::addon_event::copy_resource>(onCopyIndexBufferResource);
             reshade::unregister_event<reshade::addon_event::copy_buffer_region>(onCopyIndexBufferRegion);
             reshade::unregister_event<reshade::addon_event::bind_index_buffer>(onD3D12IndexBinding);
+            reshade::unregister_event<reshade::addon_event::bind_vertex_buffers>(onD3D12VertexBinding);
             reshade::unregister_event<reshade::addon_event::bind_pipeline_states>(onD3D12IndexTopology);
             reshade::unregister_event<reshade::addon_event::execute_command_list>(onExecuteIndexBufferCopies);
             reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(onExecuteIndexBufferBundle);

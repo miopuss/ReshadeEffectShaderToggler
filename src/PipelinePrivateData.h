@@ -6,6 +6,7 @@
 #include "ToggleGroup.h"
 #include "reshade.hpp"
 #include <chrono>
+#include <array>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -60,6 +61,12 @@ struct __declspec(novtable) ShaderData final {
 
 enum class IndexStripCut { disabled, enabled, unknown };
 
+struct VertexBufferBinding {
+    reshade::api::resource buffer{};
+    uint64_t offset = 0;
+    uint32_t stride = 0;
+};
+
 struct D3D12IndexBufferBinding {
     reshade::api::resource buffer{};
     uint64_t offset = 0;
@@ -97,6 +104,7 @@ struct __declspec(uuid("222F7169-3C09-40DB-9BC9-EC53842CE537")) CommandListDataC
     bool vulkanRenderPassSuspends = false;
     bool d3d12InsideRenderPass = false;
     D3D12IndexBufferBinding d3d12IndexBuffer;
+    std::array<VertexBufferBinding, 32> d3d12VertexBuffers{};
     IndexStripCut d3d12IndexStripCut = IndexStripCut::unknown;
     std::unordered_map<uint64_t, D3D12IndexBufferWrites> d3d12IndexWrites;
     bool d3d12UnknownIndexAlias = false;
@@ -116,6 +124,7 @@ struct __declspec(uuid("222F7169-3C09-40DB-9BC9-EC53842CE537")) CommandListDataC
         vulkanRenderPassSuspends = false;
         d3d12InsideRenderPass = false;
         d3d12IndexBuffer = {};
+        d3d12VertexBuffers = {};
         d3d12IndexStripCut = IndexStripCut::unknown;
         d3d12IndexWrites.clear();
         d3d12UnknownIndexAlias = false;
@@ -278,6 +287,7 @@ struct __declspec(uuid("C63E95B1-4E2F-46D6-A276-E8B4612C069A")) DeviceDataContai
     };
     static constexpr size_t indexBufferByteBudget = 64 * 1024 * 1024;
     std::mutex indexBufferMutex;
+    std::unordered_map<uint64_t, uint64_t> geometryResourceIds;
     std::unordered_map<uint64_t, std::vector<IndexBufferSnapshot>> indexBuffers;
     size_t indexBufferBytes = 0;
     bool indexUploadsInvalidated = false;

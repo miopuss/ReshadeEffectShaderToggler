@@ -1702,6 +1702,43 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
         if (!filtersEnabled)
             ImGui::BeginDisabled();
 
+        bool matchVB = drawSettings.matchVertexBuffer;
+        if (DrawToggleRow("Filter by vertex buffer", &matchVB, "Match any listed VB identifier.", nullptr, 4.0f)) {
+            drawSettings.matchVertexBuffer = matchVB;
+            applyDrawSettings();
+        }
+        if (matchVB || !drawSettings.vertexBufferFilters.empty()) {
+            ImGui::PushID("VertexBufferFilters");
+            ImGui::Indent(16.0f);
+            ImGui::TextWrapped("%s", Tr("VB identifiers may change during play or between launches."));
+            if (drawSettings.vertexBufferFilters.empty())
+                ImGui::TextDisabled("%s", Tr("No VB filters. Draws will not match."));
+            std::optional<size_t> removeVB;
+            for (size_t i = 0; i < drawSettings.vertexBufferFilters.size(); ++i) {
+                ImGui::PushID(static_cast<int>(i));
+                ImGui::SetNextItemWidth(190.0f);
+                const bool changed = ImGui::InputScalar("##VBIdentifier", ImGuiDataType_U64,
+                    &drawSettings.vertexBufferFilters[i], nullptr, nullptr, "%016llX", ImGuiInputTextFlags_CharsHexadecimal);
+                ImGui::SameLine();
+                if (ImGui::SmallButton(Tr("Remove")))
+                    removeVB = i;
+                if (changed)
+                    applyDrawSettings();
+                ImGui::PopID();
+            }
+            if (removeVB) {
+                drawSettings.vertexBufferFilters.erase(drawSettings.vertexBufferFilters.begin() + *removeVB);
+                applyDrawSettings();
+            }
+            if (ImGui::SmallButton(Tr("Add VB filter"))) {
+                drawSettings.vertexBufferFilters.push_back(0);
+                drawSettings.matchVertexBuffer = true;
+                applyDrawSettings();
+            }
+            ImGui::Unindent(16.0f);
+            ImGui::PopID();
+        }
+
         bool matchIdx = drawSettings.matchIndexCount;
         if (DrawToggleRow("Filter by index count", &matchIdx, "Match direct indexed draws whose index count is in any listed range.", nullptr, 4.0f)) {
             drawSettings.matchIndexCount = matchIdx;
@@ -1865,6 +1902,8 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
             if (ImGui::Button(TrLabel("Clear Geometry Filters##Overlay").c_str())) {
                 drawSettings.matchIndexCount = false;
                 drawSettings.matchVertexCount = false;
+                drawSettings.matchVertexBuffer = false;
+                drawSettings.vertexBufferFilters.clear();
                 drawSettings.matchInstanceCount = false;
                 drawSettings.indexCountRanges.clear();
                 drawSettings.vertexCountMin = 0;
@@ -1894,8 +1933,10 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
                 ImGui::TextDisabled(Tr("%zu draw variation(s) observed for 0x%08X:"), observedDraws.size(), activeHash);
             }
 
-            const float boxHeight = 85.0f;
-            if (ImGui::BeginChild("##observedDrawsScroll", ImVec2(0, boxHeight), true)) {
+            auto& boxHeight = instance.GetHuntingUIState().observedDrawHeight;
+            if (ImGui::BeginChild("##observedDrawsScroll", ImVec2(0, boxHeight),
+                                  ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY)) {
+                boxHeight = std::max(120.0f, ImGui::GetWindowHeight());
                 if (activeHash == 0) {
                     ImGui::TextDisabled(Tr("Select a shader from the left hunting list."));
                 } else if (observedDraws.empty()) {
@@ -1904,42 +1945,36 @@ static void DisplayShaderDrawSettings(AddonImGui::AddonUIData& instance, ShaderT
                     for (size_t di = 0; di < observedDraws.size(); di++) {
                         const auto& d = observedDraws[di];
                         ImGui::PushID(static_cast<int>(di));
-                        ImGui::BulletText(Tr("%s: %u %s (inst: %u, x%u)"),
+                        if (d.vertexBufferId != 0)
+                            ImGui::Text("VB[%u] 0x%llX", d.vertexBufferSlot,
+                                        static_cast<unsigned long long>(d.vertexBufferHandle));
+                        ImGui::BulletText(Tr("%s: %u %s (inst: %u)"),
                             d.isIndexed ? Tr("Indexed") : Tr("Non-idx"),
                             d.count,
                             d.isIndexed ? Tr("idx") : Tr("vtx"),
-                            d.instanceCount,
-                            d.invocations);
-                        if (d.isIndexed) {
+                            d.instanceCount);
+                        if (d.isIndexed && d.indexedVertexCount) {
                             ImGui::SameLine();
-                            if (d.indexedVertexCount)
-                                ImGui::Text(Tr("%u distinct vertices"), *d.indexedVertexCount);
-                            else
-                                ImGui::TextDisabled("%s", Tr("Vertex count unavailable"));
+                            ImGui::Text(Tr("%u distinct vertices"), *d.indexedVertexCount);
                         }
                         ImGui::SameLine();
-                        const bool setFilter = ImGui::SmallButton(Tr("Set Filter"));
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(Tr(d.isIndexed ? "Add an index range for exactly %u indices." :
-                                                               "Set the vertex count filter to exactly %u vertices."), d.count);
+                        ImGui::BeginDisabled(d.vertexBufferHandle == 0);
+                        if (ImGui::SmallButton(Tr("Set VB Filter"))) {
+                            drawSettings.addObservedVertexBuffer(d.vertexBufferHandle);
+                            applyDrawSettings();
                         }
-                        bool setVertexFilter = false;
-                        if (d.indexedVertexCount) {
-                            ImGui::SameLine();
-                            setVertexFilter = ImGui::SmallButton(Tr("Filter by vertex count"));
-                        }
-                        if (setFilter && d.isIndexed) {
+                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                            ImGui::SetTooltip("%s", Tr("Add this VB to the filter list."));
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        ImGui::BeginDisabled(!d.isIndexed);
+                        if (ImGui::SmallButton(Tr("Set Index Filter"))) {
                             drawSettings.addObservedIndexCount(d.count);
                             applyDrawSettings();
-                        } else if (setFilter || setVertexFilter) {
-                            drawSettings.suppressDrawCall = true;
-                            drawSettings.matchVertexCount = true;
-                            const uint32_t vertices = d.indexedVertexCount.value_or(d.count);
-                            drawSettings.vertexCountMin = vertices;
-                            drawSettings.vertexCountMax = vertices;
-                            drawSettings.matchIndexCount = false;
-                            applyDrawSettings();
                         }
+                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                            ImGui::SetTooltip("%s", Tr("Add this index count to the range list."));
+                        ImGui::EndDisabled();
                         ImGui::PopID();
                     }
                 }

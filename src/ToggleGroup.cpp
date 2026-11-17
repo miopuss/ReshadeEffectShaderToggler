@@ -224,11 +224,13 @@ std::string ToggleGroup::configurationSignature() const {
            << settings.suppressDrawCall << ',' << settings.matchIndexCount << ','
            << settings.matchVertexCount << ',' << settings.vertexCountMin << ','
            << settings.vertexCountMax << ',' << settings.matchInstanceCount << ','
-           << settings.instanceCountMin << ',' << settings.instanceCountMax << ',' << settings.spatialFilterEnabled;
+           << settings.matchVertexBuffer << ',' << settings.instanceCountMin << ',' << settings.instanceCountMax << ',' << settings.spatialFilterEnabled;
         for (const auto& region : settings.spatialRegions)
             ss << ',' << region.minX << ',' << region.minY << ',' << region.maxX << ',' << region.maxY;
         for (const auto& range : settings.indexCountRanges)
             ss << '|' << range.min << ',' << range.max;
+        for (const auto identifier : settings.vertexBufferFilters)
+            ss << "|VB" << identifier;
         ss << ';';
     }
 
@@ -452,6 +454,10 @@ void ToggleGroup::saveState(CDataFile& iniFile, int groupCounter) const {
             iniFile.SetUInt(rangePrefix + "Min", settings.indexCountRanges[i].min, "", drawSettingsCategory);
             iniFile.SetUInt(rangePrefix + "Max", settings.indexCountRanges[i].max, "", drawSettingsCategory);
         }
+        iniFile.SetBool(prefix + "MatchVertexBuffer", settings.matchVertexBuffer, "", drawSettingsCategory);
+        iniFile.SetUInt(prefix + "VertexBufferCount", static_cast<uint32_t>(settings.vertexBufferFilters.size()), "", drawSettingsCategory);
+        for (size_t i = 0; i < settings.vertexBufferFilters.size(); ++i)
+            iniFile.SetValue(prefix + "VertexBuffer" + std::to_string(i), std::to_string(settings.vertexBufferFilters[i]), "", drawSettingsCategory);
         iniFile.SetBool(prefix + "MatchVertex", settings.matchVertexCount, "", drawSettingsCategory);
         iniFile.SetUInt(prefix + "VertexMin", settings.vertexCountMin, "", drawSettingsCategory);
         iniFile.SetUInt(prefix + "VertexMax", settings.vertexCountMax, "", drawSettingsCategory);
@@ -751,6 +757,22 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
                     settings.indexCountRanges.push_back(range);
                 }
             }
+            settings.matchVertexBuffer = iniFile.GetBoolOrDefault(prefix + "MatchVertexBuffer", loadDrawSettingsCategory, false);
+            const uint32_t vbCount = std::min(readCount(prefix + "VertexBufferCount"), 65536u);
+            for (uint32_t vb = 0; vb < vbCount; ++vb) {
+                const auto text = iniFile.GetString(prefix + "VertexBuffer" + std::to_string(vb), loadDrawSettingsCategory);
+                uint64_t identifier = 0;
+                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), identifier);
+                if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && identifier != 0 &&
+                    std::find(settings.vertexBufferFilters.begin(), settings.vertexBufferFilters.end(), identifier) == settings.vertexBufferFilters.end())
+                    settings.vertexBufferFilters.push_back(identifier);
+            }
+            // Retired experimental filters must remain unmatched when loading their old configuration.
+            const auto oldFingerprint = iniFile.GetString(prefix + "GeometryFingerprint", loadDrawSettingsCategory);
+            if (iniFile.GetBoolOrDefault(prefix + "MatchVertexBinding", loadDrawSettingsCategory, false) ||
+                iniFile.GetBoolOrDefault(prefix + "MatchIndexBinding", loadDrawSettingsCategory, false) ||
+                (!oldFingerprint.empty() && oldFingerprint != "0"))
+                settings.matchVertexBuffer = true;
             settings.matchVertexCount = iniFile.GetBoolOrDefault(prefix + "MatchVertex", loadDrawSettingsCategory, false);
             settings.vertexCountMin = readCount(prefix + "VertexMin");
             settings.vertexCountMax = readCount(prefix + "VertexMax");

@@ -52,6 +52,7 @@ struct HuntingUIState {
     uint32_t selectedShaderType = 0;
     int previewChannel = 0;
     float shaderPaneWidth = 540.0f;
+    float observedDrawHeight = 280.0f;
 };
 
 namespace AddonImGui {

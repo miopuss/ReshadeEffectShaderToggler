@@ -33,7 +33,7 @@ Both 64-bit and 32-bit are first-class build targets. CI builds and validates bo
 
 ## Compatibility
 
-REST Enhanced+ v1.0.0 targets **ReShade 6.8 or newer** and is compiled against the ReShade 6.8.0 / API 20 baseline.
+REST Enhanced+ targets **ReShade 6.8 or newer** and is compiled against the ReShade 6.8.0 / API 20 baseline.
 
 The existing render-target, shader-hunting and binding features remain API/game dependent. D3D10/D3D11/D3D12 and Vulkan behaviour outside the paths that have been specifically tested may vary by title.
 
@@ -87,7 +87,18 @@ A typical `UI` group can contain the shaders used by the HUD, minimap, subtitles
 
 The feature suppresses graphics draws only. Compute dispatches are deliberately not suppressed because compute shaders may perform lighting, simulation, upscaling or other non-visual pipeline work.
 
-Open **Settings**, choose **Start shader hunting**, then select a shader and expand **Per-shader hiding**. Enable **Suppress draw calls** for that shader. Pixel and vertex shader rules can filter draws by vertex or index count and by instance count. An indexed draw matches when its index count falls within any enabled index range, including the endpoints. **Set Filter** on an indexed row adds its observed count as an exact range. You can also add, edit or remove ranges under **Geometry Refine Filters**. On D3D11 and D3D12, an indexed row with a known distinct vertex count also offers **Filter by vertex count**, which fills in that count and turns off the index-count filter. Observed-draw buttons leave your instance-count setting alone. An enabled rule takes precedence over the group-wide hide switch for the selected shader.
+Open **Settings**, choose **Start shader hunting**, then select a shader and expand **Per-shader hiding**. Enable **Suppress draw calls** for that shader. Pixel and vertex shader rules can filter direct draws by VB (vertex buffer), vertex or index count, and instance count. An enabled rule takes precedence over the group-wide hide switch for the selected shader.
+
+On D3D11 and D3D12, **Observed draws** groups entries by VB resource and updates each entry with its latest geometry. All 32 VB slots are inspected. Drag the list's lower edge to resize it. Known distinct vertex counts are shown for supported indexed draws.
+
+- **Set VB Filter** appends the row's VB identifier to the VB filter list.
+- **Set Index Filter** appends the row's index count as an exact inclusive range.
+- Repeated additions are deduplicated and preserve the other filter settings. Edit or remove VB identifiers and index ranges under **Geometry Refine Filters**.
+- A draw can match any listed VB and any listed index range. When both filters are enabled, both conditions must match.
+
+Click **Save Changes** to persist the lists. VB identifiers are native buffer handles and may change during play or between launches. Re-select identifiers when a saved filter stops matching. Collection and VB filtering currently cover direct D3D11 and D3D12 draws.
+
+The group settings window remains usable when the main ReShade overlay is closed. REST draws its own mouse cursor and requests input capture while that window is open; closing the window releases that request.
 
 For direct D3D11 and D3D12 draws, **Hide by screen selection** can limit suppression to drawn regions. Drag to add regions and exit with a right-click or Escape. A region rule leaves a draw intact if REST cannot safely restore its scissor state. Use **Done hunting** to apply the marked shaders, then **Save Changes** to persist the rules.
 
@@ -95,7 +106,7 @@ For direct D3D11 and D3D12 draws, **Hide by screen selection** can limit suppres
 
 If an index count matches both the HUD element you want to hide and a separate element you want to keep, enable both filters on the same shader:
 
-1. Under **Geometry Refine Filters**, enable **Filter by index count** and enter the target range, such as `156–156`. **Set Filter** on an indexed row adds its exact count to the existing ranges.
+1. Under **Geometry Refine Filters**, enable **Filter by index count** and enter the target range, such as `156–156`. **Set Index Filter** on an indexed row adds its exact count to the existing ranges.
 2. Enable **Hide by screen selection**, click **Select regions**, and drag a box around only the target HUD element.
 3. Exit selection, click **Done hunting**, and **Save Changes**.
 

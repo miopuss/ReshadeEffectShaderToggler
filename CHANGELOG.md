@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.0 — 2026-11-18
+
+- Add saved, editable per-shader VB filter lists for direct D3D11 and D3D12 draws.
+- Group observed draws by VB resource across all 32 input slots and make the list vertically resizable.
+- Add separate **Set VB Filter** and **Set Index Filter** buttons that append unique entries while preserving other filters.
+- Add PS/VS/CS abbreviations to the Chinese shader labels and simplify observed-draw text.
+- Keep the standalone group settings window interactive after closing the main ReShade overlay.
+- Update both README languages with filtering, persistence and standalone-window instructions.
+
 ## v1.0.0 — 2026-11-17
 
 - First release under the REST Enhanced+ name and the three-part version scheme.

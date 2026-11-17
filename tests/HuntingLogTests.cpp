@@ -35,6 +35,16 @@ int main() {
         manager.huntNextShader(true);
         if (lines.size() != 4 || lines.back().find("0x12345678") == std::string::npos) return 1;
         if (!logOrderValid) return 1;
+        for (uint32_t count = 1; count <= 128; ++count)
+            manager.recordDrawGeometry(0x12345678, true, count, 1);
+        if (manager.getObservedDrawGeometries().size() != 128) return 1;
+        manager.clearObservedDrawGeometries();
+        for (uint32_t count = 1; count <= 1000; ++count)
+            manager.recordDrawGeometry(0x12345678, true, count, count % 4 + 1, std::nullopt, 101, 11, 0);
+        manager.recordDrawGeometry(0x12345678, true, 6, 1, std::nullopt, 102, 22, 1);
+        const auto observed = manager.getObservedDrawGeometries();
+        if (observed.size() != 2 || observed.front().count != 1000 || observed.front().vertexBufferId != 101)
+            return 1;
         std::puts("Production hunting logs preserve stage/hash before direct, keyboard and marked selection publication; repeat selections do not flood logs.");
         return 0;
     } catch (const std::exception& e) { std::fprintf(stderr, "%s\n", e.what()); return 1; }

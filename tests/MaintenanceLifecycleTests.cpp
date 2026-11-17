@@ -89,6 +89,19 @@ int main() {
         Check(observed.suppressDrawCall && observed.matchIndexCount && !observed.matchInstanceCount);
         Check(observed.matchesDrawGeometry(true, 0, 5) && observed.matchesDrawGeometry(true, UINT32_MAX, 9));
         Check(!observed.matchesDrawGeometry(true, 1));
+        observed.addObservedVertexBuffer(0x1234567800000001ull);
+        observed.addObservedVertexBuffer(1234);
+        observed.addObservedVertexBuffer(1234);
+        Check(observed.vertexBufferFilters.size() == 2);
+        Check(observed.matchIndexCount && observed.indexCountRanges.size() == 2);
+        observed.addObservedIndexCount(25);
+        observed.addObservedIndexCount(25);
+        Check(observed.vertexBufferFilters.size() == 2 && observed.indexCountRanges.size() == 3);
+        const std::array<uint64_t, 2> boundBuffers{1234, 5678};
+        const std::array<uint64_t, 1> otherBuffer{9999};
+        Check(observed.matchesDrawGeometry(true, 0, 5, std::nullopt, boundBuffers));
+        Check(!observed.matchesDrawGeometry(true, 0, 5, std::nullopt, otherBuffer));
+        Check(!observed.matchesDrawGeometry(true, 0, 5));
         filtered.SetShaderDrawSettings(1, 123, observed);
 
         ShaderToggler::ShaderDrawSettings vertices;
@@ -147,6 +160,12 @@ int main() {
         Check(restoredRule->indexCountRanges == filter.indexCountRanges);
         const auto restoredObserved = restored.FindShaderDrawSettings(1, 123);
         Check(restoredObserved && restoredObserved->indexCountRanges == observed.indexCountRanges);
+        Check(restoredObserved->matchVertexBuffer && restoredObserved->vertexBufferFilters == observed.vertexBufferFilters);
+        Check(restoredObserved->matchesDrawGeometry(true, 0, 5, std::nullopt, boundBuffers));
+        const std::array<uint64_t, 1> wideBuffer{0x1234567800000001ull};
+        Check(restoredObserved->matchesDrawGeometry(true, 25, 5, std::nullopt, wideBuffer));
+        Check(!restoredObserved->matchesDrawGeometry(true, 26, 5, std::nullopt, wideBuffer));
+        Check(!restoredObserved->matchesDrawGeometry(true, 25, 5, std::nullopt, otherBuffer));
         const std::string drawSection = "Group0_ShaderDrawSettings";
         const std::string legacyEntry = parsed.GetUInt("Entry0Stage", drawSection) == 0 ? "Entry0" : "Entry1";
         Check(parsed.DeleteKey(legacyEntry + "IndexRangeCount", drawSection));
