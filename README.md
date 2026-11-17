@@ -89,6 +89,18 @@ Open **Settings**, choose **Start shader hunting**, then select a shader and exp
 
 For direct D3D11 and D3D12 draws, **Hide by screen selection** can limit suppression to drawn regions. Drag to add regions and exit with a right-click or Escape. A region rule leaves a draw intact if REST cannot safely restore its scissor state. Use **Done hunting** to apply the marked shaders, then **Save Changes** to persist the rules.
 
+#### Combine index ranges and screen selection
+
+If an index count matches both the HUD element you want to hide and a separate element you want to keep, enable both filters on the same shader:
+
+1. Under **Geometry Refine Filters**, enable **Filter by index count** and enter the target range, such as `156–156`. **Set Filter** on an indexed row adds its exact count to the existing ranges.
+2. Enable **Hide by screen selection**, click **Select regions**, and drag a box around only the target HUD element.
+3. Exit selection, click **Done hunting**, and **Save Changes**.
+
+REST first matches draws against any listed index range, then suppresses only the pixels those draws produce inside the selected boxes. This also works when a single draw contains both elements, as long as the part you want to keep stays outside the boxes. If matching elements overlap inside a box, both are clipped there.
+
+**简体中文**：在同一着色器的「几何细节筛选」中，同时开启「按索引数筛选」和「按框选区域隐藏」。例如填入 `156–156`，再只框住要隐藏的 UI。插件先匹配索引数，再裁掉匹配绘制落在框内的像素。想保留的 UI 位于框外时，即使它和目标 UI 属于同一次绘制，也可以保留。
+
 ## Configuring effects
 
 Each group can control a subset of the techniques currently known to ReShade. Techniques are executed in their global ReShade order.
