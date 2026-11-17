@@ -1,6 +1,12 @@
+param(
+  [ValidateSet('en', 'zh')]
+  [string]$Language = 'en'
+)
+
 $ErrorActionPreference = 'Stop'
-$x86 = "src/Win32/Release/ReshadeEffectShaderToggler.addon32"
-$x64 = "src/x64/Release/ReshadeEffectShaderToggler.addon64"
+$configuration = if ($Language -eq 'zh') { 'Release-zh' } else { 'Release' }
+$x86 = "src/Win32/$configuration/ReshadeEffectShaderToggler.addon32"
+$x64 = "src/x64/$configuration/ReshadeEffectShaderToggler.addon64"
 
 function Get-PeMachine([string]$Path) {
   $stream = [System.IO.File]::OpenRead($Path)

@@ -12,6 +12,7 @@ on:
       - ".gitmodules"
       - ".github/workflows/**"
       - "scripts/**"
+      - "build.ps1"
       - "tests/**"
       - "docs/releases/**"
   pull_request:
@@ -22,10 +23,6 @@ on:
 concurrency:
   group: msbuild-${{ startsWith(github.event.head_commit.message, 'Release v') && 'release' || 'validation' }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ !startsWith(github.event.head_commit.message, 'Release v') }}
-
-env:
-  SOLUTION_FILE_PATH: src/ReshadeEffectShaderToggler.sln
-  BUILD_CONFIGURATION: Release
 
 permissions:
   contents: read
@@ -78,17 +75,10 @@ jobs:
           python -m unittest discover -s tests -p "test_*.py"
           if ($LASTEXITCODE -ne 0) { throw "Release routing regression failed." }
 
-      - name: Add MSBuild to PATH
+      - name: Build x64 and x86
         if: steps.scope.outputs.native == 'true'
-        uses: microsoft/setup-msbuild@v3
-
-      - name: Build x64
-        if: steps.scope.outputs.native == 'true'
-        run: msbuild /m /property:Platform=x64 /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }}
-
-      - name: Build x86
-        if: steps.scope.outputs.native == 'true'
-        run: msbuild /m /property:Platform=x86 /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }}
+        shell: pwsh
+        run: ./build.ps1 -Language en
 
       - name: Rendering safety regression tests
         if: steps.scope.outputs.native == 'true'

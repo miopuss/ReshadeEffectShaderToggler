@@ -6,10 +6,6 @@ on:
       - "v*.*.*.*"
   workflow_dispatch:
 
-env:
-  SOLUTION_FILE_PATH: src/ReshadeEffectShaderToggler.sln
-  BUILD_CONFIGURATION: Release
-
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -76,14 +72,9 @@ jobs:
         shell: pwsh
         run: ./scripts/fetch-dependencies.ps1
 
-      - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v3
-
-      - name: Build x64
-        run: msbuild /m /property:Platform=x64 /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }}
-
-      - name: Build x86
-        run: msbuild /m /property:Platform=x86 /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }}
+      - name: Build x64 and x86 in both languages
+        shell: pwsh
+        run: ./build.ps1
 
       - name: Rendering safety regression tests
         shell: pwsh
@@ -91,10 +82,12 @@ jobs:
 
       - name: Validate x86/x64 binaries
         shell: pwsh
-        run: ./scripts/validate-binaries.ps1
+        run: |
+          ./scripts/validate-binaries.ps1
+          ./scripts/validate-binaries.ps1 -Language zh
 
       - name: Package release
-        run: python scripts/package-build.py --kind release
+        run: python scripts/package-build.py --kind release --include-chinese
 
       - name: Publish GitHub release
         shell: pwsh
@@ -103,5 +96,5 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           # Existing releases are immutable: retries must never replace assets.
-          gh release create $env:RELEASE_TAG "release.zip" "SHA256SUMS.txt" "BG3-Configs-D3D11+Vulkan.zip" "BG3-Configs-SHA256SUMS.txt" "BG3-Configs-PROVENANCE.txt" --verify-tag --latest --title "REST Enhanced $env:RELEASE_TAG" --notes-file "docs/releases/$env:RELEASE_TAG.md"
+          gh release create $env:RELEASE_TAG "release.zip" "release.zh-CN.zip" "SHA256SUMS.txt" "BG3-Configs-D3D11+Vulkan.zip" "BG3-Configs-SHA256SUMS.txt" "BG3-Configs-PROVENANCE.txt" --verify-tag --latest --title "REST Enhanced $env:RELEASE_TAG" --notes-file "docs/releases/$env:RELEASE_TAG.md"
           if ($LASTEXITCODE -ne 0) { throw "Release publication failed; existing releases are never overwritten." }

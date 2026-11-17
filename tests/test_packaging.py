@@ -55,6 +55,25 @@ class PackagingTests(unittest.TestCase):
                     self.assertIn('Vulkan/ReshadeEffectShaderToggler.ini', configs.namelist())
                     self.assertIn('PROVENANCE.json', configs.namelist())
 
+    def test_bilingual_release_uses_language_specific_binaries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.fixture(root)
+            manifest = json.loads((root / 'scripts/package-manifest.json').read_text(encoding='utf-8'))
+            binaries = {target: source for target, source in manifest['main'].items() if target.endswith(('.addon32', '.addon64'))}
+            for target, source in binaries.items():
+                path = root / source.replace('/Release/', '/Release-zh/')
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('Chinese: ' + target, encoding='utf-8')
+            packager.package(root, 'release', 'a' * 40, include_chinese=True)
+            with zipfile.ZipFile(root / 'release.zip') as english, zipfile.ZipFile(root / 'release.zh-CN.zip') as chinese:
+                self.assertEqual(set(english.namelist()), set(chinese.namelist()))
+                for target in binaries:
+                    self.assertEqual(chinese.read(target).decode(), 'Chinese: ' + target)
+                    self.assertNotEqual(chinese.read(target), english.read(target))
+            checksum = hashlib.sha256((root / 'release.zh-CN.zip').read_bytes()).hexdigest()
+            self.assertIn(f'{checksum}  release.zh-CN.zip', (root / 'SHA256SUMS.txt').read_text())
+
     def test_missing_input_fails_before_archive_is_created(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

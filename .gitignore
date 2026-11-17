@@ -266,6 +266,7 @@ scripts/__pycache__/
 
 # Generated release artifacts
 /release.zip
+/release.zh-CN.zip
 /SHA256SUMS.txt
 /BG3-Configs-*.zip
 /BG3-Configs-*.txt

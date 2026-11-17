@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.5.680 — 2026-11-17
+
+- Add a dedicated REST overlay with group cards, a shortcuts table and a searchable technique list with routing modes.
+- Add per-shader hiding, draw-count and instance-count filters, and region selection for supported direct D3D11 and D3D12 draws.
+- Publish separate English and Simplified Chinese packages for both x64 and x86.
+
 ## v1.7.4.680 — 2026-11-16
 
 - Adapt D3D9 standalone-surface targets and pre-Reset cleanup from BadassBaboon/CrazyDaifu.

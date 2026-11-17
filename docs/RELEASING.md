@@ -145,7 +145,7 @@ The tag-driven **Release** workflow will then:
 
 1. validate the tag format;
 2. stamp `src/version.h` from the tag inside the build runner;
-3. build x64 and x86 Release configurations;
+3. build and validate English and Simplified Chinese Release binaries for x64 and x86;
 4. package:
    - `ReshadeEffectShaderToggler.addon64`;
    - `ReshadeEffectShaderToggler.addon32`;
@@ -155,8 +155,8 @@ The tag-driven **Release** workflow will then:
    - `BUILD-INFO.txt`;
    - `Shaders/`;
    - `docs/`;
-5. create `release.zip` and the BG3 configuration ZIP from the shared manifest;
-6. generate checksums for both archives and a BG3 source/provenance file;
+5. create `release.zip` (English), `release.zh-CN.zip` (Simplified Chinese) and the BG3 configuration ZIP from the shared manifest;
+6. generate checksums for all archives and a BG3 source/provenance file;
 7. publish all assets using the committed `docs/releases/<tag>.md` notes.
 
 No release is published if either architecture fails to build.
