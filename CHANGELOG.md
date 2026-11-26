@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.1 — 2026-11-26
+
+- Fix a D3D11 crash when a texture outlives ReShade's device proxy and its late destruction callback accesses released geometry-tracking data.
+- Track live devices before accessing resource callbacks and wait for callbacks already in progress before device teardown.
+- Add a standalone D3D11 late-resource regression probe. The original binary reproduces the access violation; the fixed candidate passes, and the maintainer confirmed the fix in Azur Promilia on D3D11 with ReShade 6.8.0.
+
 ## v1.1.0 — 2026-11-18
 
 - Add saved, editable per-shader VB filter lists for direct D3D11 and D3D12 draws.

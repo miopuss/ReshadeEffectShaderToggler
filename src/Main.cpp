@@ -60,8 +60,10 @@
 #include <imgui.h>
 #include <reshade.hpp>
 #include <set>
+#include <shared_mutex>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace reshade::api;
@@ -87,6 +89,11 @@ constexpr auto REST_VAR_ANNOTATION = "source";
 
 static filesystem::path g_dllPath;
 static filesystem::path g_basePath;
+
+// D3D11 child resources can outlive ReShade's device proxy. Their destruction
+// callbacks still carry its old address, so check lifetime before any API call.
+static std::shared_mutex g_resourceDeviceMutex;
+static std::unordered_set<device*> g_resourceDevices;
 
 static ShaderToggler::ShaderManager g_pixelShaderManager("PS");
 static ShaderToggler::ShaderManager g_vertexShaderManager("VS");
@@ -131,11 +138,19 @@ static void onInitDevice(device* device) {
     if (device->get_api() == device_api::d3d9)
         reshade::log::message(reshade::log::level::info, "D3D9 copy/preview state: native target and depth snapshots enabled.");
     device->create_private_data<DeviceDataContainer>();
+    std::unique_lock lifetimeLock(g_resourceDeviceMutex);
+    g_resourceDevices.insert(device);
 }
 
 static void releaseScissorEnabledRasterizerStates(ID3D11Device* device);
 
 static void onDestroyDevice(device* device) {
+    {
+        // Wait for resource callbacks already in progress, and reject late ones
+        // before disposing the device's private data or invoking nested releases.
+        std::unique_lock lifetimeLock(g_resourceDeviceMutex);
+        g_resourceDevices.erase(device);
+    }
     if (device->get_api() == device_api::d3d11)
         releaseScissorEnabledRasterizerStates(reinterpret_cast<ID3D11Device*>(device->get_native()));
     DeviceDataContainer& data = *device->get_private_data<DeviceDataContainer>();
@@ -510,6 +525,10 @@ static void onInitResource(device* device, const resource_desc& desc, const subr
 }
 
 static void onDestroyResource(device* device, resource res) {
+    std::shared_lock lifetimeLock(g_resourceDeviceMutex);
+    if (!g_resourceDevices.contains(device))
+        return;
+
     if (device->get_api() == device_api::d3d11 || device->get_api() == device_api::d3d12) {
         auto& state = *device->get_private_data<DeviceDataContainer>();
         std::lock_guard lock(state.indexBufferMutex);
